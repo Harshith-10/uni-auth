@@ -1,0 +1,213 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use time::Duration;
+use tokio::net::TcpListener;
+
+use auth_axum::{auth_router, AuthState};
+use auth_client::{
+    start_loopback_listener, AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage,
+    TokenStorage,
+};
+use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
+use axum::Router;
+
+async fn start_test_server() -> String {
+    let adapter = Arc::new(InMemoryAuthAdapter::new());
+    let config = AuthConfig {
+        secret: b"auth-client-test-secret-32b-key".to_vec(),
+        base_url: "http://127.0.0.1:0/api/auth".to_string(),
+        session_expires_in: Duration::days(7),
+        ott_expires_in: Duration::minutes(3),
+        reset_password_expires_in: Duration::hours(1),
+        verify_email_expires_in: Duration::hours(24),
+        auto_sign_in: true,
+        require_email_verification: false,
+        min_password_length: 8,
+        max_password_length: 128,
+    };
+
+    let service = Arc::new(AuthService::new(config, adapter));
+    let state = AuthState::new(service);
+
+    let app = Router::new().nest("/api/auth", auth_router(state));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base_url = format!("http://127.0.0.1:{port}/api/auth");
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    base_url
+}
+
+#[tokio::test]
+async fn test_sign_up_and_token_storage() {
+    let base_url = start_test_server().await;
+    let storage = Arc::new(MockTokenStorage::new());
+    let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
+
+    assert!(storage.get_token().unwrap().is_none());
+
+    // 1. Sign up
+    let res = client
+        .sign_up_email("GPUI User", "gpui@example.com", "securepass123", Some(true))
+        .await
+        .expect("Sign-up should succeed");
+
+    assert_eq!(res.user.email, "gpui@example.com");
+
+    // 2. Token must now be persisted in storage automatically
+    let stored_token = storage.get_token().unwrap().expect("Token should be in storage");
+    assert!(!stored_token.is_empty());
+
+    // 3. get_session works using the stored token
+    let session = client.get_session().await.unwrap().expect("Session should resolve");
+    assert_eq!(session.user.email, "gpui@example.com");
+}
+
+#[tokio::test]
+async fn test_session_restoration_on_fresh_client_instance() {
+    let base_url = start_test_server().await;
+    let storage = Arc::new(MockTokenStorage::new());
+
+    // Client 1 signs in
+    {
+        let client1 = Arc::new(BetterAuthNativeClient::new(
+            base_url.clone(),
+            Arc::clone(&storage) as Arc<dyn TokenStorage>,
+        ));
+        client1
+            .sign_up_email("Persist User", "persist@example.com", "mypassword123", Some(true))
+            .await
+            .unwrap();
+    }
+
+    // Client 2 boots up later sharing the same secure storage (simulating app relaunch)
+    let client2 = Arc::new(BetterAuthNativeClient::new(
+        base_url,
+        Arc::clone(&storage) as Arc<dyn TokenStorage>,
+    ));
+
+    let store = AuthStore::new(client2);
+    let restored = store.restore_session().await.unwrap();
+    assert!(restored);
+
+    match store.status() {
+        AuthStatus::Authenticated { user, .. } => {
+            assert_eq!(user.email, "persist@example.com");
+        }
+        _ => panic!("Expected Authenticated status"),
+    }
+}
+
+#[tokio::test]
+async fn test_sign_out_clears_local_keyring_and_server_session() {
+    let base_url = start_test_server().await;
+    let storage = Arc::new(MockTokenStorage::new());
+    let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
+
+    client
+        .sign_up_email("Signout User", "signout@example.com", "mypassword123", Some(true))
+        .await
+        .unwrap();
+
+    assert!(storage.get_token().unwrap().is_some());
+
+    // Sign out
+    let signout_res = client.sign_out().await.expect("Sign out should succeed");
+    assert!(signout_res.success);
+
+    // Storage must now be cleared
+    assert!(storage.get_token().unwrap().is_none());
+
+    // get_session must return None
+    assert!(client.get_session().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_loopback_listener_and_ott_exchange() {
+    let base_url = start_test_server().await;
+    let storage = Arc::new(MockTokenStorage::new());
+    let client = Arc::new(BetterAuthNativeClient::new(base_url.clone(), Arc::clone(&storage) as Arc<dyn TokenStorage>));
+
+    // Sign up an account
+    client
+        .sign_up_email("OAuth User", "oauth@example.com", "passphrase123", Some(true))
+        .await
+        .unwrap();
+
+    // Generate OTT from existing session
+    let ott_res = client.generate_one_time_token().await.unwrap();
+    let ott = ott_res.token;
+
+    // Start loopback listener
+    let (port, rx) = start_loopback_listener().await.unwrap();
+
+    // Simulate browser redirect to loopback callback
+    let callback_url = format!("http://127.0.0.1:{port}/auth/callback?token={ott}");
+    let http = reqwest::Client::new();
+
+    let redirect_response = http.get(&callback_url).send().await.unwrap();
+    assert_eq!(redirect_response.status(), 200);
+
+    let html = redirect_response.text().await.unwrap();
+    assert!(html.contains("Sign-in Complete"));
+
+    // Receiver should have caught the token
+    let received_token = rx.await.unwrap().expect("Should receive valid token");
+    assert_eq!(received_token, ott);
+
+    // Fresh client on another machine / storage exchanges OTT
+    let fresh_storage = Arc::new(MockTokenStorage::new());
+    let fresh_client = Arc::new(BetterAuthNativeClient::new(
+        base_url,
+        Arc::clone(&fresh_storage) as Arc<dyn TokenStorage>,
+    ));
+
+    let session = fresh_client
+        .verify_one_time_token(&received_token)
+        .await
+        .expect("Verification should succeed");
+
+    assert_eq!(session.user.email, "oauth@example.com");
+    assert!(fresh_storage.get_token().unwrap().is_some());
+}
+
+#[tokio::test]
+async fn test_auth_store_reactive_notifications() {
+    let base_url = start_test_server().await;
+    let storage = Arc::new(MockTokenStorage::new());
+    let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
+
+    let store = AuthStore::new(client);
+
+    let transitions = Arc::new(AtomicUsize::new(0));
+    let t_clone = Arc::clone(&transitions);
+
+    store.subscribe(move |_status| {
+        t_clone.fetch_add(1, Ordering::SeqCst);
+    });
+
+    assert_eq!(store.status(), AuthStatus::Loading);
+
+    // 1. Restore (unauthenticated) -> notification 1
+    store.restore_session().await.unwrap();
+    assert_eq!(store.status(), AuthStatus::Unauthenticated);
+    assert_eq!(transitions.load(Ordering::SeqCst), 1);
+
+    // 2. Sign up -> Authenticated -> notification 2
+    store
+        .sign_up_email("Reactive", "reactive@example.com", "secretpass123", Some(true))
+        .await
+        .unwrap();
+
+    assert!(store.is_authenticated());
+    assert_eq!(transitions.load(Ordering::SeqCst), 2);
+
+    // 3. Sign out -> Unauthenticated -> notification 3
+    store.sign_out().await.unwrap();
+    assert_eq!(store.status(), AuthStatus::Unauthenticated);
+    assert_eq!(transitions.load(Ordering::SeqCst), 3);
+}

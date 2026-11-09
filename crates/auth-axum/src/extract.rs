@@ -1,0 +1,140 @@
+//! Dual Cookie and Bearer session extractors for Axum routes.
+//!
+//! Allows any protected endpoint (auth routes or custom SaaS APIs like `/api/saas/me`)
+//! to be called seamlessly from both React web apps (via cookies) and GPUI native desktop
+//! apps (via `Authorization: Bearer <token>`).
+
+use std::ops::Deref;
+use axum::extract::{FromRef, FromRequestParts};
+use axum::http::request::Parts;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+
+use auth_proto::{AuthErrorResponse, SessionWire, UserWire};
+use crate::cookies::extract_cookie_token;
+use crate::state::AuthState;
+
+/// Extracts an authentication token from either `Authorization: Bearer <token>` or cookies.
+pub fn extract_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
+    // 1. Bearer token extraction (case-insensitive scheme)
+    if let Some(auth_header) = headers.get(axum::http::header::AUTHORIZATION) {
+        if let Ok(auth_str) = auth_header.to_str() {
+            let trimmed = auth_str.trim();
+            if trimmed.len() > 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+                let token = trimmed[7..].trim();
+                if !token.is_empty() {
+                    return Some(token.to_string());
+                }
+            }
+        }
+    }
+
+    // 2. Cookie extraction fallback
+    extract_cookie_token(headers, cookie_name)
+}
+
+/// Extractor that requires a valid, active session.
+/// Rejects with HTTP 401 Unauthorized if missing or expired.
+#[derive(Debug, Clone)]
+pub struct CurrentSession {
+    pub session: SessionWire,
+    pub user: UserWire,
+    /// Indicates whether the session was authenticated via Bearer token (true) or Cookie (false)
+    pub is_bearer: bool,
+}
+
+impl Deref for CurrentSession {
+    type Target = SessionWire;
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+
+impl<S> FromRequestParts<S> for CurrentSession
+where
+    S: Send + Sync,
+    AuthState: FromRef<S>,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let auth_state = AuthState::from_ref(state);
+
+        let is_bearer = parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.trim().to_ascii_lowercase().starts_with("bearer "))
+            .unwrap_or(false);
+
+        let token = extract_token_from_headers(&parts.headers, &auth_state.cookie_name);
+
+        let token = match token {
+            Some(t) => t,
+            None => {
+                let err = AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
+                return Err((StatusCode::UNAUTHORIZED, Json(err)).into_response());
+            }
+        };
+
+        match auth_state.service.get_session(&token).await {
+            Ok(Some(session_and_user)) => Ok(CurrentSession {
+                session: session_and_user.session,
+                user: session_and_user.user,
+                is_bearer,
+            }),
+            Ok(None) | Err(_) => {
+                let err = AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
+                Err((StatusCode::UNAUTHORIZED, Json(err)).into_response())
+            }
+        }
+    }
+}
+
+/// Extractor for optional authentication.
+/// Resolves to `Some(session)` if a valid token is provided, or `None` if unauthenticated.
+#[derive(Debug, Clone)]
+pub struct OptionalSession(pub Option<CurrentSession>);
+
+impl Deref for OptionalSession {
+    type Target = Option<CurrentSession>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<S> FromRequestParts<S> for OptionalSession
+where
+    S: Send + Sync,
+    AuthState: FromRef<S>,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let auth_state = AuthState::from_ref(state);
+
+        let is_bearer = parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.trim().to_ascii_lowercase().starts_with("bearer "))
+            .unwrap_or(false);
+
+        let token = extract_token_from_headers(&parts.headers, &auth_state.cookie_name);
+
+        let token = match token {
+            Some(t) => t,
+            None => return Ok(OptionalSession(None)),
+        };
+
+        match auth_state.service.get_session(&token).await {
+            Ok(Some(session_and_user)) => Ok(OptionalSession(Some(CurrentSession {
+                session: session_and_user.session,
+                user: session_and_user.user,
+                is_bearer,
+            }))),
+            _ => Ok(OptionalSession(None)),
+        }
+    }
+}

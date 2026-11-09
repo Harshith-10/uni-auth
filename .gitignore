@@ -1,0 +1,41 @@
+# AI Artifacts
+uni_auth_agent_plan.md
+patches/
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Reference repositories (cloned upstream dependencies)
+.reference/
+
+# Node.js & Web build artifacts
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Database & local SQLite files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Operating System & IDE metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.iml

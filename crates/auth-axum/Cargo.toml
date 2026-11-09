@@ -1,0 +1,35 @@
+[package]
+name = "auth-axum"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Axum HTTP router exposing BetterAuth v1 API routes with dual Cookie/Bearer auth"
+
+[lints]
+workspace = true
+
+[dependencies]
+auth-core = { workspace = true }
+auth-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+http = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+oauth2 = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+reqwest = { workspace = true }
+tower-service = { workspace = true }
+auth-sqlx = { workspace = true }
