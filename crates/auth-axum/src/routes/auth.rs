@@ -8,6 +8,7 @@ use auth_proto::{
 };
 use crate::cookies::{build_clear_session_cookie, build_session_cookie_with_options};
 use crate::extract::{extract_request_meta, extract_token_from_headers};
+use crate::middleware::verify_trusted_origin;
 use crate::state::AuthState;
 
 fn error_to_response(err: auth_core::AuthError) -> Response {
@@ -21,6 +22,10 @@ pub async fn sign_up_email(
     headers: HeaderMap,
     Json(payload): Json<SignUpEmailRequest>,
 ) -> Response {
+    if let Err(err) = verify_trusted_origin(&headers, &state.trusted_origins) {
+        return error_to_response(err);
+    }
+
     let remember_me = payload.remember_me.unwrap_or(true);
     let meta = extract_request_meta(&headers);
 
@@ -63,6 +68,10 @@ pub async fn sign_in_email(
     headers: HeaderMap,
     Json(payload): Json<SignInEmailRequest>,
 ) -> Response {
+    if let Err(err) = verify_trusted_origin(&headers, &state.trusted_origins) {
+        return error_to_response(err);
+    }
+
     let callback_url = payload.callback_url.clone();
     let remember_me = payload.remember_me.unwrap_or(true);
     let meta = extract_request_meta(&headers);
@@ -110,6 +119,10 @@ pub async fn sign_out(
     headers: HeaderMap,
     bytes: axum::body::Bytes,
 ) -> Response {
+    if let Err(err) = verify_trusted_origin(&headers, &state.trusted_origins) {
+        return error_to_response(err);
+    }
+
     let token = extract_token_from_headers(&headers, &state.cookie_name).unwrap_or_default();
     let body: Option<SignOutRequest> = if bytes.is_empty() {
         None

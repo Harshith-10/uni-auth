@@ -56,6 +56,7 @@ pub struct AuthState {
     pub secure_cookies: bool,
     pub same_site: String,
     pub oauth_providers: Arc<HashMap<String, OAuthProviderConfig>>,
+    pub trusted_origins: Arc<Vec<String>>,
 }
 
 impl AuthState {
@@ -66,6 +67,7 @@ impl AuthState {
             secure_cookies: false, // Default false for local dev / tests, can be toggled
             same_site: "Lax".to_string(),
             oauth_providers: Arc::new(HashMap::new()),
+            trusted_origins: Arc::new(Vec::new()),
         }
     }
 
@@ -81,6 +83,16 @@ impl AuthState {
         let mut providers = (*self.oauth_providers).clone();
         providers.insert(config.provider_id.clone(), config);
         self.oauth_providers = Arc::new(providers);
+        self
+    }
+
+    /// Configures trusted origins for CSRF `Origin` header validation on mutation endpoints.
+    pub fn with_trusted_origins<I, S>(mut self, origins: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.trusted_origins = Arc::new(origins.into_iter().map(Into::into).collect());
         self
     }
 }

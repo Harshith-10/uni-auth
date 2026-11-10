@@ -1,4 +1,4 @@
-//! Core authentication service coordinating business logic, crypto, and persistence.
+//! Core authentication service coordinating business logic, crypto, hooks, and persistence.
 
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
@@ -16,6 +16,7 @@ use crate::adapter::AuthAdapter;
 use crate::crypto;
 use crate::email::{EmailSender, NoopEmailSender};
 use crate::error::{AdapterError, AuthError};
+use crate::hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter};
 use crate::models::{
     CreateAccountInput, CreateSessionInput, CreateUserInput, CreateVerificationInput, RequestMeta,
 };
@@ -77,7 +78,11 @@ pub struct AuthService {
     config: AuthConfig,
     adapter: Arc<dyn AuthAdapter>,
     email_sender: Arc<dyn EmailSender>,
+    hooks: Arc<dyn AuthHooks>,
+    rate_limiter: Option<Arc<SlidingWindowRateLimiter>>,
     auto_sign_in_after_verification: bool,
+    session_update_age: Duration,
+    session_fresh_age: Duration,
 }
 
 impl AuthService {
@@ -86,12 +91,26 @@ impl AuthService {
             config,
             adapter,
             email_sender: Arc::new(NoopEmailSender),
+            hooks: Arc::new(NoopAuthHooks),
+            rate_limiter: None,
             auto_sign_in_after_verification: false,
+            session_update_age: Duration::hours(24),
+            session_fresh_age: Duration::hours(24),
         }
     }
 
     pub fn with_email_sender(mut self, email_sender: Arc<dyn EmailSender>) -> Self {
         self.email_sender = email_sender;
+        self
+    }
+
+    pub fn with_hooks(mut self, hooks: Arc<dyn AuthHooks>) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    pub fn with_rate_limiter(mut self, limiter: Arc<SlidingWindowRateLimiter>) -> Self {
+        self.rate_limiter = Some(limiter);
         self
     }
 
@@ -101,8 +120,41 @@ impl AuthService {
         self
     }
 
+    /// Configures how frequently an active session's `expires_at` is extended on `get_session`.
+    pub fn with_session_update_age(mut self, update_age: Duration) -> Self {
+        self.session_update_age = update_age;
+        self
+    }
+
+    /// Configures the `freshAge` window required for sensitive operations (`change-password`, `unlink-account`, `delete-user`).
+    /// Set to `Duration::ZERO` to disable freshness checks.
+    pub fn with_session_fresh_age(mut self, fresh_age: Duration) -> Self {
+        self.session_fresh_age = fresh_age;
+        self
+    }
+
     pub fn auto_sign_in_after_verification(&self) -> bool {
         self.auto_sign_in_after_verification
+    }
+
+    pub fn session_fresh_age(&self) -> Duration {
+        self.session_fresh_age
+    }
+
+    /// Returns `true` if the session was created within `session_fresh_age` (or if `session_fresh_age <= 0`).
+    pub fn is_session_fresh(&self, session: &SessionWire) -> bool {
+        if self.session_fresh_age <= Duration::ZERO {
+            return true;
+        }
+        (OffsetDateTime::now_utc() - session.created_at) < self.session_fresh_age
+    }
+
+    /// Enforces rate limiting for the given bucket key if a `SlidingWindowRateLimiter` is attached.
+    pub fn check_rate_limit(&self, key: &str) -> Result<(), AuthError> {
+        if let Some(ref limiter) = self.rate_limiter {
+            limiter.check(key)?;
+        }
+        Ok(())
     }
 
     pub fn config(&self) -> &AuthConfig {
@@ -144,6 +196,12 @@ impl AuthService {
         req: SignUpEmailRequest,
         meta: RequestMeta,
     ) -> Result<SignUpResponse, AuthError> {
+        let rate_key = format!(
+            "sign-up:{}",
+            meta.ip_address.as_deref().unwrap_or("local")
+        );
+        self.check_rate_limit(&rate_key)?;
+
         let email = req.email.trim().to_lowercase();
         if !email.contains('@') || !email.contains('.') {
             return Err(AuthError::InvalidEmail);
@@ -177,6 +235,9 @@ impl AuthService {
                 email_verified: false,
             })
             .await?;
+
+        let user_wire = user.to_wire();
+        self.hooks.on_user_created(&user_wire).await;
 
         // Link credential account
         self.adapter
@@ -223,11 +284,11 @@ impl AuthService {
 
             return Ok(SignUpResponse {
                 token: None,
-                user: user.to_wire(),
+                user: user_wire,
             });
         }
 
-        // Auto sign-in if enabled (rememberMe: false still creates a session, omitting Max-Age on cookie)
+        // Auto sign-in if enabled
         if self.config.auto_sign_in {
             let raw_token = crypto::generate_session_token();
             let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
@@ -244,14 +305,17 @@ impl AuthService {
                 })
                 .await?;
 
+            let session_wire = session.to_wire();
+            self.hooks.on_session_created(&session_wire, &user_wire).await;
+
             Ok(SignUpResponse {
                 token: Some(session.token),
-                user: user.to_wire(),
+                user: user_wire,
             })
         } else {
             Ok(SignUpResponse {
                 token: None,
-                user: user.to_wire(),
+                user: user_wire,
             })
         }
     }
@@ -268,6 +332,12 @@ impl AuthService {
         req: SignInEmailRequest,
         meta: RequestMeta,
     ) -> Result<SignInResponse, AuthError> {
+        let rate_key = format!(
+            "sign-in:{}",
+            meta.ip_address.as_deref().unwrap_or("local")
+        );
+        self.check_rate_limit(&rate_key)?;
+
         let email = req.email.trim().to_lowercase();
         if !email.contains('@') || !email.contains('.') {
             return Err(AuthError::InvalidEmail);
@@ -334,11 +404,15 @@ impl AuthService {
             })
             .await?;
 
+        let user_wire = user.to_wire();
+        let session_wire = session.to_wire();
+        self.hooks.on_session_created(&session_wire, &user_wire).await;
+
         Ok(SignInResponse {
             redirect: req.callback_url.is_some(),
             token: session.token,
             url: req.callback_url,
-            user: user.to_wire(),
+            user: user_wire,
         })
     }
 
@@ -347,6 +421,7 @@ impl AuthService {
     // ──────────────────────────────────────────────
 
     /// Retrieves an active session and user by raw or signed session token.
+    /// Automatically slides session expiry forward if `session_update_age` has elapsed.
     pub async fn get_session(
         &self,
         token_or_signed: &str,
@@ -356,7 +431,7 @@ impl AuthService {
             None => return Ok(None),
         };
 
-        let session = match self.adapter.find_session_by_token(&raw_token).await? {
+        let mut session = match self.adapter.find_session_by_token(&raw_token).await? {
             Some(s) => s,
             None => return Ok(None),
         };
@@ -364,6 +439,23 @@ impl AuthService {
         if session.is_expired() {
             let _ = self.adapter.delete_session(&raw_token).await;
             return Ok(None);
+        }
+
+        // Sliding window session refresh when updateAge has elapsed
+        let now = OffsetDateTime::now_utc();
+        if self.session_update_age > Duration::ZERO
+            && (now - session.updated_at) >= self.session_update_age
+        {
+            let new_expires_at = now + self.config.session_expires_in;
+            if self
+                .adapter
+                .update_session_expiry(&raw_token, new_expires_at)
+                .await
+                .is_ok()
+            {
+                session.expires_at = new_expires_at;
+                session.updated_at = now;
+            }
         }
 
         let user = match self.adapter.find_user_by_id(&session.user_id).await? {
@@ -425,7 +517,6 @@ impl AuthService {
             }
         }
 
-        // If not found directly by token, check if token_or_signed matches a session ID
         let user_sessions = self.adapter.list_sessions_by_user_id(user_id).await?;
         if let Some(session) = user_sessions.into_iter().find(|s| s.id == token_or_signed) {
             self.adapter.delete_session(&session.token).await?;
@@ -466,6 +557,8 @@ impl AuthService {
         req: RequestPasswordResetRequest,
     ) -> Result<StatusMessageResponse, AuthError> {
         let email = req.email.trim().to_lowercase();
+        self.check_rate_limit(&format!("password-reset:{email}"))?;
+
         let user = self.adapter.find_user_by_email(&email).await?;
 
         if let Some(u) = user {
@@ -493,7 +586,6 @@ impl AuthService {
                 .send_password_reset_email(&email, &reset_url, &token)
                 .await;
         } else {
-            // Mitigate timing attacks when email does not exist
             let _ = crypto::generate_random_token(24);
             let _ = self
                 .adapter
@@ -540,7 +632,6 @@ impl AuthService {
             .await
             .map_err(AuthError::Crypto)?;
 
-        // Atomically consume the single-use verification token
         self.adapter
             .consume_verification(&identifier)
             .await?
@@ -572,8 +663,8 @@ impl AuthService {
             Err(e) => return Err(AuthError::Adapter(e)),
         }
 
-        // Security requirement: password reset must revoke all existing sessions
         self.adapter.delete_sessions_by_user_id(&user_id).await?;
+        self.hooks.on_password_reset(&user_id).await;
 
         Ok(StatusResponse::success())
     }
@@ -718,6 +809,7 @@ impl AuthService {
         }
 
         self.adapter.delete_user(user_id).await?;
+        self.hooks.on_user_deleted(user_id).await;
         Ok(StatusMessageResponse {
             status: true,
             message: "User deleted".to_string(),
@@ -793,6 +885,11 @@ impl AuthService {
             .await?;
 
         let user = self.adapter.find_user_by_id(&user_id).await?;
+        let user_wire = user.as_ref().map(|u| u.to_wire());
+        if let Some(ref uw) = user_wire {
+            self.hooks.on_email_verified(uw).await;
+        }
+
         let session_token = if self.auto_sign_in_after_verification && user.is_some() {
             let raw_token = crypto::generate_session_token();
             let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
@@ -814,7 +911,7 @@ impl AuthService {
 
         Ok(VerifyEmailResponse {
             status: true,
-            user: user.map(|u| u.to_wire()),
+            user: user_wire,
             token: session_token,
         })
     }

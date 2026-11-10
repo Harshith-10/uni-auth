@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 use auth_core::RequestMeta;
-use auth_proto::{AuthErrorResponse, SessionWire, UserWire};
+use auth_proto::{error_codes, AuthErrorResponse, SessionWire, UserWire};
 use crate::cookies::extract_cookie_token;
 use crate::state::AuthState;
 
@@ -124,6 +124,44 @@ where
                 Err((StatusCode::UNAUTHORIZED, Json(err)).into_response())
             }
         }
+    }
+}
+
+/// Extractor that requires a valid AND fresh session (created within `session_fresh_age`).
+///
+/// Matches Better Auth's `freshSessionMiddleware` (`packages/better-auth/src/api/routes/session.ts:599-617`),
+/// rejecting stale sessions with HTTP `403 Forbidden` and error code `SESSION_NOT_FRESH`.
+#[derive(Debug, Clone)]
+pub struct FreshSession(pub CurrentSession);
+
+impl Deref for FreshSession {
+    type Target = CurrentSession;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<S> FromRequestParts<S> for FreshSession
+where
+    S: Send + Sync,
+    AuthState: FromRef<S>,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let current = CurrentSession::from_request_parts(parts, state).await?;
+        let auth_state = AuthState::from_ref(state);
+
+        if !auth_state.service.is_session_fresh(&current.session) {
+            let err = AuthErrorResponse::new(
+                error_codes::SESSION_NOT_FRESH,
+                "Session is not fresh",
+            )
+            .with_status(403);
+            return Err((StatusCode::FORBIDDEN, Json(err)).into_response());
+        }
+
+        Ok(FreshSession(current))
     }
 }
 

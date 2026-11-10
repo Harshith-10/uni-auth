@@ -5,7 +5,7 @@ use axum::Json;
 
 use auth_proto::{AuthErrorResponse, DeleteUserRequest, UpdateUserRequest};
 use crate::cookies::build_clear_session_cookie;
-use crate::extract::CurrentSession;
+use crate::extract::{CurrentSession, FreshSession};
 use crate::state::AuthState;
 
 fn error_to_response(err: auth_core::AuthError) -> Response {
@@ -32,10 +32,10 @@ pub async fn update_user(
     }
 }
 
-/// `POST /api/auth/delete-user`
+/// `POST /api/auth/delete-user` (requires a fresh session)
 pub async fn delete_user(
     State(state): State<AuthState>,
-    current_session: CurrentSession,
+    fresh_session: FreshSession,
     bytes: axum::body::Bytes,
 ) -> Response {
     let payload: DeleteUserRequest = if bytes.is_empty() {
@@ -46,7 +46,7 @@ pub async fn delete_user(
 
     match state
         .service
-        .delete_user(&current_session.user.id, payload)
+        .delete_user(&fresh_session.user.id, payload)
         .await
     {
         Ok(res) => {

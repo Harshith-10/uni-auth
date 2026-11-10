@@ -6,16 +6,21 @@
 //! - `InMemoryAuthAdapter`: High-performance in-memory adapter for zero-dependency unit tests.
 //! - `crypto`: Argon2id non-blocking hashing, HMAC-SHA256 signing, HKDF derivation, and constant-time checks.
 //! - `EmailSender`: Abstraction for email verification and password reset dispatch.
+//! - `hooks`: Lifecycle event hooks (`AuthHooks`), sliding-window rate limiter, and background cleanup task.
 
 pub mod adapter;
 pub mod crypto;
 pub mod email;
 pub mod error;
+pub mod hooks;
 pub mod models;
 pub mod service;
 
 pub use adapter::{AuthAdapter, InMemoryAuthAdapter};
 pub use email::{EmailSender, MockEmailSender, NoopEmailSender};
 pub use error::{AdapterError, AuthError};
+pub use hooks::{
+    spawn_expired_cleanup_worker, AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter,
+};
 pub use models::*;
 pub use service::{AuthConfig, AuthService};

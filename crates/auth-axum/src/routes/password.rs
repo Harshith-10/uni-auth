@@ -8,7 +8,7 @@ use auth_proto::{
     AuthErrorResponse, ChangePasswordRequest, RequestPasswordResetRequest, ResetPasswordRequest,
 };
 use crate::cookies::build_session_cookie;
-use crate::extract::CurrentSession;
+use crate::extract::FreshSession;
 use crate::state::AuthState;
 
 fn error_to_response(err: auth_core::AuthError) -> Response {
@@ -65,14 +65,14 @@ pub async fn reset_password(
 
 pub async fn change_password(
     State(state): State<AuthState>,
-    current_session: CurrentSession,
+    fresh_session: FreshSession,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> Response {
     match state
         .service
         .change_password(
-            &current_session.user.id,
-            &current_session.session.token,
+            &fresh_session.user.id,
+            &fresh_session.session.token,
             payload,
         )
         .await
