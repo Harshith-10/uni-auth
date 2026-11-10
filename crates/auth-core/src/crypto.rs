@@ -30,10 +30,11 @@ pub fn is_legacy_scrypt_hash(hash: &str) -> bool {
 /// Hashes a password asynchronously using Argon2id without blocking Tokio worker threads.
 pub async fn hash_password(password: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
+        let normalized: String = password.nfkc().collect();
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
         argon2
-            .hash_password(password.as_bytes(), &salt)
+            .hash_password(normalized.as_bytes(), &salt)
             .map(|h| h.to_string())
             .map_err(|e| format!("Password hashing failed: {e}"))
     })
@@ -52,9 +53,10 @@ pub async fn verify_password(hash: String, password: String) -> Result<bool, Str
             Ok(h) => h,
             Err(e) => return Err(format!("Invalid password hash format: {e}")),
         };
+        let normalized: String = password.nfkc().collect();
         let argon2 = Argon2::default();
         Ok(argon2
-            .verify_password(password.as_bytes(), &parsed_hash)
+            .verify_password(normalized.as_bytes(), &parsed_hash)
             .is_ok())
     })
     .await

@@ -5,7 +5,7 @@ use tokio::net::TcpListener;
 use auth_axum::{auth_router, AuthState};
 use auth_client::{AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage, TokenStorage};
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
-use auth_proto::{AdminCreateUserRequest, RoleValue};
+use auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
 use axum::Router;
 use desktop_gpui::{DashboardTab, DesktopAuthApp};
 use gpui_kit::component::Root;
@@ -59,15 +59,32 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
     ));
     let store = AuthStore::new(client);
 
+    let admin_actor = UserWire {
+        id: "seed-admin".to_string(),
+        name: "Seed Admin".to_string(),
+        email: "seed-admin@system.local".to_string(),
+        email_verified: true,
+        image: None,
+        created_at: time::OffsetDateTime::now_utc(),
+        updated_at: time::OffsetDateTime::now_utc(),
+        role: Some("admin".to_string()),
+        banned: Some(false),
+        ban_reason: None,
+        ban_expires: None,
+    };
+
     // Seed an admin account to test both sign-in and Admin Console loading
     service
-        .admin_create_user(AdminCreateUserRequest {
-            email: "admin@example.com".to_string(),
-            password: Some("admin12345".to_string()),
-            name: "Admin User".to_string(),
-            role: Some(RoleValue::Single("admin".to_string())),
-            data: None,
-        })
+        .admin_create_user(
+            &admin_actor,
+            AdminCreateUserRequest {
+                email: "admin@example.com".to_string(),
+                password: Some("admin12345".to_string()),
+                name: "Admin User".to_string(),
+                role: Some(RoleValue::Single("admin".to_string())),
+                data: None,
+            },
+        )
         .await
         .expect("Seed admin user should succeed");
 
@@ -149,6 +166,15 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
         "Expected AuthStatus::Authenticated, but timed out waiting for authentication"
     );
 
+    // Let any background session/SaaS fetch settle and draw window
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cx.run_until_parked();
+    }
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+
     // Switch to Admin tab and verify admin users list populates
     cx.update(|window, cx| {
         app.update(cx, |view, cx| {
@@ -170,6 +196,9 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
         }
     }
     assert!(admin_loaded, "Expected admin_users_total >= 2 in Admin tab");
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
 
     // Sign out
     cx.update(|window, cx| {

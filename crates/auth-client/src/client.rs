@@ -6,11 +6,11 @@ use thiserror::Error;
 
 use auth_proto::{
     AdminBanUserRequest, AdminCreateUserRequest, AdminListUserSessionsResponse,
-    AdminListUsersResponse, AdminSetRoleRequest, AdminSetUserPasswordRequest, AdminSuccessResponse,
-    AdminUserIdRequest, AdminUserResponse, AuthErrorResponse, OneTimeTokenGenerateResponse,
-    OneTimeTokenVerifyRequest, RevokeSessionRequest, RoleValue, SessionAndUserResponse,
-    SessionWire, SignInEmailRequest, SignInResponse, SignOutResponse, SignUpEmailRequest,
-    SignUpResponse, StatusResponse,
+    AdminListUsersQuery, AdminListUsersResponse, AdminSetRoleRequest, AdminSetUserPasswordRequest,
+    AdminSuccessResponse, AdminUserIdRequest, AdminUserResponse, AuthErrorResponse,
+    OneTimeTokenGenerateResponse, OneTimeTokenVerifyRequest, RevokeSessionRequest, RoleValue,
+    SessionAndUserResponse, SessionWire, SignInEmailRequest, SignInResponse, SignOutResponse,
+    SignUpEmailRequest, SignUpResponse, StatusResponse,
 };
 use crate::storage::{StorageError, TokenStorage};
 
@@ -394,32 +394,16 @@ impl BetterAuthNativeClient {
     /// Lists users via `GET /api/auth/admin/list-users`.
     pub async fn admin_list_users(
         &self,
-        search_value: Option<&str>,
-        limit: Option<usize>,
-        offset: Option<usize>,
+        query: &AdminListUsersQuery,
     ) -> Result<AdminListUsersResponse, ClientError> {
-        let mut req = self
+        let res = self
             .http
             .get(format!("{}/admin/list-users", self.base_url))
-            .headers(self.prepare_headers());
+            .headers(self.prepare_headers())
+            .query(query)
+            .send()
+            .await?;
 
-        let mut query_params: Vec<(&str, String)> = Vec::new();
-        if let Some(sv) = search_value {
-            if !sv.is_empty() {
-                query_params.push(("searchValue", sv.to_string()));
-            }
-        }
-        if let Some(l) = limit {
-            query_params.push(("limit", l.to_string()));
-        }
-        if let Some(o) = offset {
-            query_params.push(("offset", o.to_string()));
-        }
-        if !query_params.is_empty() {
-            req = req.query(&query_params);
-        }
-
-        let res = req.send().await?;
         let status = res.status().as_u16();
         if status >= 400 {
             let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
@@ -469,11 +453,11 @@ impl BetterAuthNativeClient {
     pub async fn admin_set_role(
         &self,
         user_id: impl Into<String>,
-        role: impl Into<String>,
+        role: impl Into<RoleValue>,
     ) -> Result<AdminUserResponse, ClientError> {
         let payload = AdminSetRoleRequest {
             user_id: user_id.into(),
-            role: RoleValue::Single(role.into()),
+            role: role.into(),
         };
 
         let res = self

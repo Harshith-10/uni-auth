@@ -360,6 +360,24 @@ impl RoleValue {
     }
 }
 
+impl From<String> for RoleValue {
+    fn from(s: String) -> Self {
+        RoleValue::Single(s)
+    }
+}
+
+impl From<&str> for RoleValue {
+    fn from(s: &str) -> Self {
+        RoleValue::Single(s.to_string())
+    }
+}
+
+impl From<Vec<String>> for RoleValue {
+    fn from(v: Vec<String>) -> Self {
+        RoleValue::Multiple(v)
+    }
+}
+
 /// `POST /api/auth/admin/set-role`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

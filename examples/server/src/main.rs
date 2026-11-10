@@ -17,7 +17,7 @@ use auth_axum::{
     auth_routes, build_auth_cors_layer, AuthState, CurrentSession, OAuthProviderConfig,
 };
 use auth_core::{AdminUpdateUserFields, AuthConfig, AuthService};
-use auth_proto::{AdminCreateUserRequest, RoleValue};
+use auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
 use auth_sqlx::SqliteAuthAdapter;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -97,33 +97,54 @@ async fn seed_demo_accounts(service: &AuthService) -> Result<(), Box<dyn std::er
         },
     ];
 
+    let admin_actor = UserWire {
+        id: "seed-admin".to_string(),
+        name: "Seed Admin".to_string(),
+        email: "seed-admin@system.local".to_string(),
+        email_verified: true,
+        image: None,
+        created_at: time::OffsetDateTime::now_utc(),
+        updated_at: time::OffsetDateTime::now_utc(),
+        role: Some("admin".to_string()),
+        banned: Some(false),
+        ban_reason: None,
+        ban_expires: None,
+    };
+
     for acct in accounts {
         if service
             .adapter()
-            .get_user_by_email(acct.email)
+            .find_user_by_email(acct.email)
             .await?
             .is_some()
         {
             continue;
         }
 
+        let mut data = serde_json::Map::new();
+        data.insert(
+            "emailVerified".to_string(),
+            serde_json::Value::Bool(acct.email_verified),
+        );
+
         let created = service
-            .admin_create_user(AdminCreateUserRequest {
-                email: acct.email.to_string(),
-                password: Some(acct.password.to_string()),
-                name: acct.name.to_string(),
-                role: Some(RoleValue::Single(acct.role.to_string())),
-                data: Some(serde_json::json!({
-                    "emailVerified": acct.email_verified,
-                })),
-            })
+            .admin_create_user(
+                &admin_actor,
+                AdminCreateUserRequest {
+                    email: acct.email.to_string(),
+                    password: Some(acct.password.to_string()),
+                    name: acct.name.to_string(),
+                    role: Some(RoleValue::Single(acct.role.to_string())),
+                    data: Some(data),
+                },
+            )
             .await?;
 
         if acct.banned {
             service
                 .adapter()
                 .update_user_admin(
-                    &created.id,
+                    &created.user.id,
                     AdminUpdateUserFields {
                         banned: Some(true),
                         ban_reason: Some(acct.ban_reason.map(|s| s.to_string())),

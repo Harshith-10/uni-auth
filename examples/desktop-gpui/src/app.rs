@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use auth_client::{AuthStatus, AuthStore, ClientError};
 use auth_proto::{AdminCreateUserRequest, AdminListUsersQuery, RoleValue, SessionWire, UserWire};
+use gpui_kit::base::StyledExt;
 use gpui_kit::component::{
     input::{InputEvent, InputState},
     notification::Notification,
@@ -14,7 +15,7 @@ use gpui_kit::{
     SharedString, Styled as _, Subscription, Window,
 };
 
-use crate::views::{auth::AuthFormView, dashboard::DashboardView};
+use crate::views::{auth::AuthFormView, dashboard::DashboardView, navbar::NavbarView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMode {
@@ -22,10 +23,13 @@ pub enum AuthMode {
     SignUp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DashboardTab {
+    #[default]
     Overview,
+    Sessions,
     Admin,
+    Diagnostics,
 }
 
 pub struct DesktopAuthApp {
@@ -75,13 +79,13 @@ impl DesktopAuthApp {
         let password_input = cx.new(|cx| InputState::new(window, cx).placeholder("••••••••"));
 
         let admin_search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search users by email..."));
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search by email..."));
         let admin_new_name_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("New user full name"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("e.g. Marie Curie"));
         let admin_new_email_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("newuser@example.com"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("marie@example.com"));
         let admin_new_password_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Initial password"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("••••••••"));
 
         let sub_name = cx.subscribe_in(&name_input, window, |_, _, event, _, cx| {
             if matches!(event, InputEvent::Change) {
@@ -162,6 +166,12 @@ impl DesktopAuthApp {
         self.active_tab = tab;
         if tab == DashboardTab::Admin && self.admin_users.is_empty() {
             self.refresh_admin_users(window, cx);
+        } else if tab == DashboardTab::Sessions {
+            self.refresh_sessions(window, cx);
+        } else if (tab == DashboardTab::Overview || tab == DashboardTab::Diagnostics)
+            && self.saas_me_json.is_none()
+        {
+            self.call_saas_me(window, cx);
         }
         cx.notify();
     }
@@ -531,7 +541,7 @@ impl DesktopAuthApp {
                             i.set_value("", window, cx);
                         });
                         window.push_notification(
-                            Notification::success(format!("Created user {}", created.email)),
+                            Notification::success(format!("Created user {}", created.user.email)),
                             cx,
                         );
                         app.refresh_admin_users(window, cx);
@@ -577,8 +587,8 @@ impl DesktopAuthApp {
                         window.push_notification(
                             Notification::success(format!(
                                 "Updated {} role to {}",
-                                updated.email,
-                                updated.role.as_deref().unwrap_or("user")
+                                updated.user.email,
+                                updated.user.role.as_deref().unwrap_or("user")
                             )),
                             cx,
                         );
@@ -632,7 +642,7 @@ impl DesktopAuthApp {
                             "Banned"
                         };
                         window.push_notification(
-                            Notification::success(format!("{action} {}", updated.email)),
+                            Notification::success(format!("{action} {}", updated.user.email)),
                             cx,
                         );
                         app.refresh_admin_users(window, cx);
@@ -671,7 +681,7 @@ impl DesktopAuthApp {
 
             let _ = this.update_in(cx, |app, window, cx| {
                 match res {
-                    Ok(()) => {
+                    Ok(_) => {
                         app.active_tab = DashboardTab::Overview;
                         window.push_notification(
                             Notification::info("Now impersonating selected user"),
@@ -709,7 +719,7 @@ impl DesktopAuthApp {
 
             let _ = this.update_in(cx, |app, window, cx| {
                 match res {
-                    Ok(()) => {
+                    Ok(_) => {
                         window.push_notification(
                             Notification::success("Restored administrator session"),
                             cx,
@@ -863,13 +873,16 @@ impl Render for DesktopAuthApp {
         let theme = cx.theme();
         let bg = theme.background;
         let fg = theme.foreground;
+        let border = theme.border;
         let muted_fg = theme.muted_foreground;
 
-        let content: AnyElement = match self.store.status() {
+        let status = self.store.status();
+
+        let main_view: AnyElement = match status {
             AuthStatus::Loading => v_flex()
                 .items_center()
                 .justify_center()
-                .size_full()
+                .h(gpui_kit::px(400.))
                 .gap_3()
                 .child(Spinner::new())
                 .child(
@@ -879,35 +892,62 @@ impl Render for DesktopAuthApp {
                         .child("Restoring session from OS keychain..."),
                 )
                 .into_any_element(),
-            AuthStatus::Unauthenticated => div()
-                .size_full()
-                .overflow_y_scrollbar()
-                .child(
-                    h_flex()
-                        .justify_center()
-                        .w_full()
-                        .p_6()
-                        .child(AuthFormView::render(self, cx)),
-                )
-                .into_any_element(),
+            AuthStatus::Unauthenticated => AuthFormView::render(self, cx).into_any_element(),
             AuthStatus::Authenticated {
                 ref user,
                 ref session,
             } => {
                 let user_clone = user.clone();
                 let session_clone = session.clone();
-                div()
-                    .size_full()
-                    .overflow_y_scrollbar()
-                    .child(
-                        h_flex().justify_center().w_full().p_6().child(
-                            DashboardView::render(self, &user_clone, &session_clone, cx),
-                        ),
-                    )
-                    .into_any_element()
+                DashboardView::render(self, &user_clone, &session_clone, cx).into_any_element()
             }
         };
 
-        div().size_full().bg(bg).text_color(fg).child(content)
+        v_flex()
+            .size_full()
+            .bg(bg)
+            .text_color(fg)
+            .child(NavbarView::render(self, &status, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .overflow_y_scrollbar()
+                    .child(
+                        h_flex()
+                            .justify_center()
+                            .w_full()
+                            .p_6()
+                            .child(main_view),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .px_6()
+                    .py_2()
+                    .border_t_1()
+                    .border_color(border)
+                    .text_xs()
+                    .text_color(muted_fg)
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().font_bold().text_color(fg).child("Uni-Auth Desktop"))
+                            .child("•")
+                            .child("Native GPUI + Axum Engine"),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child("OS Keyring Storage")
+                            .child("•")
+                            .child("RFC 6749 Compliant"),
+                    ),
+            )
     }
 }
