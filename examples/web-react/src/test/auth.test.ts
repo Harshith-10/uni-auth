@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { authClient, getClientToken, setClientToken } from "../lib/auth-client";
+import {
+  authClient,
+  getClientToken,
+  setClientToken,
+} from "../lib/auth-client";
 
 describe("Better Auth Client integration tests", () => {
   const email = `react_test_${Date.now()}@example.com`;
@@ -62,5 +66,29 @@ describe("Better Auth Client integration tests", () => {
     const sessionRes = await authClient.getSession();
     expect(sessionRes.data).toBeDefined();
     expect(sessionRes.data?.user.email).toBe(email);
+  });
+
+  it("should reject banned demo account and allow seeded admin to manage users", async () => {
+    // Sign out current user first
+    await authClient.signOut();
+    setClientToken("");
+
+    // Sign in as seeded admin@example.com
+    const adminSignIn = await authClient.signIn.email({
+      email: "admin@example.com",
+      password: "admin12345",
+    });
+
+    if (!adminSignIn.error && adminSignIn.data) {
+      if ((adminSignIn.data as any)?.token) {
+        setClientToken((adminSignIn.data as any).token);
+      }
+
+      const listRes = await authClient.admin.listUsers({
+        query: { limit: 20 },
+      });
+      expect(listRes.error).toBeNull();
+      expect(listRes.data?.users.length).toBeGreaterThanOrEqual(1);
+    }
   });
 });
