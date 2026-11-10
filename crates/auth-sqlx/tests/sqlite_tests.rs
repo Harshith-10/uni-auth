@@ -86,6 +86,53 @@ async fn test_sqlite_adapter_direct_crud() {
         .expect("Account should be found");
     assert_eq!(found_acc.password.as_deref(), Some("hashed_pw_here"));
 
+    // 5B. OAuth Account token refresh update
+    adapter
+        .create_account(CreateAccountInput {
+            id: None,
+            user_id: user.id.clone(),
+            account_id: "google_sub_123".to_string(),
+            provider_id: "google".to_string(),
+            password: None,
+            access_token: Some("old_access".to_string()),
+            refresh_token: Some("initial_refresh".to_string()),
+            id_token: None,
+            access_token_expires_at: None,
+            refresh_token_expires_at: None,
+            scope: Some("openid,email".to_string()),
+        })
+        .await
+        .unwrap();
+
+    adapter
+        .update_account_tokens(
+            "google",
+            "google_sub_123",
+            Some("new_access".to_string()),
+            None, // OAuth refresh_token omitted on subsequent login -> should preserve initial_refresh
+            Some("new_id_tok".to_string()),
+            Some(OffsetDateTime::now_utc() + Duration::hours(1)),
+            Some("openid,email,profile".to_string()),
+        )
+        .await
+        .expect("update_account_tokens should succeed");
+
+    let refreshed_acc = adapter
+        .find_account("google", "google_sub_123")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refreshed_acc.access_token.as_deref(), Some("new_access"));
+    assert_eq!(
+        refreshed_acc.refresh_token.as_deref(),
+        Some("initial_refresh")
+    );
+    assert_eq!(refreshed_acc.id_token.as_deref(), Some("new_id_tok"));
+    assert_eq!(
+        refreshed_acc.scope.as_deref(),
+        Some("openid,email,profile")
+    );
+
     // 6. Session lifecycle
     let session = adapter
         .create_session(CreateSessionInput {

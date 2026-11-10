@@ -1,9 +1,9 @@
 //! Cryptographic primitives for Better Auth wire and storage compatibility.
 //!
 //! - Non-blocking Argon2id password hashing and verification inside `tokio::task::spawn_blocking`.
-//! - Legacy Better Auth `scrypt` (`<salt>:<hex_key>`, N=16384, r=16, p=1, dkLen=64) verification
-//!   for zero-downtime migration from TypeScript Better Auth databases.
-//! - HKDF-SHA256 key derivation from `BETTER_AUTH_SECRET`/`UNI_AUTH_SECRET`.
+//! - Legacy Better Auth `scrypt` (`<salt>:<hex_key>`, N=16384, r=16, p=1, dkLen=64, NFKC-normalized)
+//!   verification for zero-downtime migration from TypeScript Better Auth databases.
+//! - HKDF-SHA256 key derivation and raw-secret HMAC-SHA256 verification from `BETTER_AUTH_SECRET`/`UNI_AUTH_SECRET`.
 //! - HMAC-SHA256 token and cookie signing matching Better Auth format (`token.signature`).
 //! - Constant-time signature verification (`subtle::ConstantTimeEq`).
 //! - Cryptographically secure token generation (`rand::rngs::OsRng`).
@@ -12,12 +12,13 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+use unicode_normalization::UnicodeNormalization;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -61,9 +62,12 @@ pub async fn verify_password(hash: String, password: String) -> Result<bool, Str
 }
 
 /// Hashes a password using Better Auth's TypeScript `scrypt` parameters (`N=16384, r=16, p=1, dkLen=64`)
-/// and returns `<salt>:<hex_key>`. Useful for cross-implementation migration tests.
+/// with Unicode `NFKC` normalization and returns `<salt>:<hex_key>`.
+///
+/// Reference: `.reference/better-auth/packages/better-auth/src/crypto/password.test.ts` lines 72-78
 pub fn hash_scrypt_better_auth(salt: &str, password: &str) -> Result<String, String> {
-    let dk = scrypt_derive(password.as_bytes(), salt.as_bytes(), 16384, 16, 1, 64)?;
+    let normalized: String = password.nfkc().collect();
+    let dk = scrypt_derive(normalized.as_bytes(), salt.as_bytes(), 16384, 16, 1, 64)?;
     Ok(format!("{salt}:{}", hex_encode(&dk)))
 }
 
@@ -75,8 +79,9 @@ fn verify_scrypt_better_auth(hash: &str, password: &str) -> Result<bool, String>
     if expected_bytes.is_empty() {
         return Err("Invalid scrypt derived key length".to_string());
     }
+    let normalized: String = password.nfkc().collect();
     let derived = scrypt_derive(
-        password.as_bytes(),
+        normalized.as_bytes(),
         salt.as_bytes(),
         16384,
         16,
@@ -284,9 +289,6 @@ pub fn derive_signing_key(secret: &[u8], info: &[u8]) -> [u8; 32] {
 /// Signs a token string using HMAC-SHA256 with a key derived from `secret`.
 ///
 /// Output format: `<token>.<base64url_signature>`
-///
-/// This matches Better Auth's `set-auth-token` and signed cookie wire convention:
-/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/bearer/index.ts` lines 81-85
 pub fn sign_token(secret: &[u8], token: &str) -> String {
     let key = derive_signing_key(secret, b"better-auth-token-signing");
     let mut mac = HmacSha256::new_from_slice(&key).expect("HMAC can take key of any size");
@@ -295,20 +297,83 @@ pub fn sign_token(secret: &[u8], token: &str) -> String {
     format!("{token}.{signature}")
 }
 
-/// Verifies an HMAC-SHA256 signature against the raw token using constant-time comparison.
-pub fn verify_signature(secret: &[u8], token: &str, signature: &str) -> bool {
-    let key = derive_signing_key(secret, b"better-auth-token-signing");
-    let mut mac = match HmacSha256::new_from_slice(&key) {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
+/// Signs a token string using raw-secret HMAC-SHA256 (`base64urlnopad`), matching
+/// `@better-auth/utils/hmac` (`createHMAC("SHA-256", "base64urlnopad")`).
+///
+/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/bearer/index.ts` lines 81-87
+pub fn sign_token_better_auth(secret: &[u8], token: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC can take key of any size");
     mac.update(token.as_bytes());
-    let expected_signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    format!("{token}.{signature}")
+}
 
-    expected_signature
-        .as_bytes()
-        .ct_eq(signature.as_bytes())
-        .into()
+/// Signs a cookie token using raw-secret HMAC-SHA256 with standard padded Base64 (`=`),
+/// matching `better-call`'s `serializeSignedCookie` / `makeSignature`.
+///
+/// Reference: `.reference/better-auth/packages/better-auth/src/crypto/index.ts` lines 104-114
+pub fn sign_cookie_better_call(secret: &[u8], token: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC can take key of any size");
+    mac.update(token.as_bytes());
+    let signature = STANDARD.encode(mac.finalize().into_bytes());
+    format!("{token}.{signature}")
+}
+
+/// Verifies an HMAC-SHA256 signature against the raw token using constant-time comparison.
+///
+/// Accepts:
+/// 1. `uni-auth` HKDF-derived `base64urlnopad` signatures (`derive_signing_key(secret, "better-auth-token-signing")`),
+/// 2. Upstream `@better-auth/utils/hmac` raw-secret `base64urlnopad` signatures, and
+/// 3. Upstream `better-call` raw-secret standard padded Base64 signatures (including URL-encoded `%3D`/`%2B`/`%2F`).
+pub fn verify_signature(secret: &[u8], token: &str, signature: &str) -> bool {
+    let decoded_sig = percent_decode_if_needed(signature);
+    let sig_bytes = decoded_sig.as_bytes();
+
+    // 1. Check HKDF-derived key signature (uni-auth native)
+    let hkdf_key = derive_signing_key(secret, b"better-auth-token-signing");
+    let hkdf_matches = if let Ok(mut mac) = HmacSha256::new_from_slice(&hkdf_key) {
+        mac.update(token.as_bytes());
+        let expected_url = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        bool::from(expected_url.as_bytes().ct_eq(sig_bytes))
+    } else {
+        false
+    };
+
+    // 2. Check raw-secret HMAC-SHA256 (upstream Better Auth / better-call)
+    let raw_matches = if let Ok(mut mac) = HmacSha256::new_from_slice(secret) {
+        mac.update(token.as_bytes());
+        let raw_mac = mac.finalize().into_bytes();
+        let expected_url = URL_SAFE_NO_PAD.encode(raw_mac);
+        let expected_std = STANDARD.encode(raw_mac);
+        let url_ok = bool::from(expected_url.as_bytes().ct_eq(sig_bytes));
+        let std_ok = bool::from(expected_std.as_bytes().ct_eq(sig_bytes));
+        url_ok || std_ok
+    } else {
+        false
+    };
+
+    hkdf_matches || raw_matches
+}
+
+fn percent_decode_if_needed(input: &str) -> String {
+    if !input.contains('%') {
+        return input.to_string();
+    }
+    let mut out = Vec::with_capacity(input.len());
+    let mut bytes = input.bytes();
+    while let Some(b) = bytes.next() {
+        if b == b'%' {
+            let hi = bytes.next().and_then(hex_nibble);
+            let lo = bytes.next().and_then(hex_nibble);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h << 4) | l);
+                continue;
+            }
+            return input.to_string();
+        }
+        out.push(b);
+    }
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
 }
 
 /// Strictly verifies a signed `<token>.<signature>` string, rejecting any unsigned input.
@@ -386,6 +451,32 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_legacy_scrypt_unicode_nfkc_normalization() {
+        let salt = "0123456789abcdef0123456789abcdef";
+        // Decomposed 'é' (e + combining acute accent U+0301) vs precomposed 'é' (U+00E9)
+        let nfd_password = "cafe\u{0301}-password-123";
+        let nfc_password = "caf\u{00e9}-password-123";
+
+        let scrypt_hash = hash_scrypt_better_auth(salt, nfc_password).unwrap();
+        assert!(
+            verify_password(scrypt_hash.clone(), nfd_password.to_string())
+                .await
+                .unwrap(),
+            "Decomposed UTF-8 password must verify against NFKC-normalized Better Auth scrypt hash"
+        );
+
+        // Compatibility characters (fullwidth Latin 'ＡＢＣ' -> 'ABC' under NFKC)
+        let fullwidth_pw = "\u{ff21}\u{ff22}\u{ff23}-secret-99";
+        let ascii_pw = "ABC-secret-99";
+        let fw_hash = hash_scrypt_better_auth(salt, fullwidth_pw).unwrap();
+        assert!(
+            verify_password(fw_hash, ascii_pw.to_string())
+                .await
+                .unwrap()
+        );
+    }
+
     #[test]
     fn test_sign_and_verify_token() {
         let secret = b"super-secret-auth-key-32-bytes-long";
@@ -418,6 +509,37 @@ mod tests {
         assert_eq!(
             extract_and_verify_token(secret, &token),
             Some(token.clone())
+        );
+    }
+
+    #[test]
+    fn test_upstream_better_auth_raw_hmac_and_better_call_cookie_compat() {
+        let secret = b"shared-ts-and-rust-better-auth-secret";
+        let token = generate_session_token();
+
+        // 1. Upstream @better-auth/utils/hmac base64urlnopad format
+        let upstream_bearer = sign_token_better_auth(secret, &token);
+        assert_eq!(
+            extract_and_verify_signed_token(secret, &upstream_bearer).as_deref(),
+            Some(token.as_str())
+        );
+
+        // 2. Upstream better-call serializeSignedCookie format (standard Base64 with '=' padding)
+        let better_call_cookie = sign_cookie_better_call(secret, &token);
+        assert!(better_call_cookie.ends_with('='));
+        assert_eq!(
+            extract_and_verify_signed_token(secret, &better_call_cookie).as_deref(),
+            Some(token.as_str())
+        );
+
+        // 3. URL-encoded cookie value (where '=' is '%3D', '+' is '%2B', '/' is '%2F')
+        let url_encoded_cookie = better_call_cookie
+            .replace('+', "%2B")
+            .replace('/', "%2F")
+            .replace('=', "%3D");
+        assert_eq!(
+            extract_and_verify_signed_token(secret, &url_encoded_cookie).as_deref(),
+            Some(token.as_str())
         );
     }
 }

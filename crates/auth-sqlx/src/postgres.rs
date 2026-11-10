@@ -450,6 +450,53 @@ impl AuthAdapter for PostgresAuthAdapter {
         })
     }
 
+    fn update_account_tokens(
+        &self,
+        provider_id: &str,
+        account_id: &str,
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        id_token: Option<String>,
+        access_token_expires_at: Option<OffsetDateTime>,
+        scope: Option<String>,
+    ) -> BoxFuture<'static, Result<(), AdapterError>> {
+        let pool = self.pool.clone();
+        let provider_id = provider_id.to_string();
+        let account_id = account_id.to_string();
+        Box::pin(async move {
+            let now = OffsetDateTime::now_utc();
+            let res = sqlx::query(
+                r#"
+                UPDATE "account"
+                SET access_token = $1,
+                    refresh_token = COALESCE($2, refresh_token),
+                    id_token = COALESCE($3, id_token),
+                    access_token_expires_at = $4,
+                    scope = COALESCE($5, scope),
+                    updated_at = $6
+                WHERE provider_id = $7 AND account_id = $8
+                "#,
+            )
+            .bind(access_token)
+            .bind(refresh_token)
+            .bind(id_token)
+            .bind(access_token_expires_at)
+            .bind(scope)
+            .bind(now)
+            .bind(provider_id)
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            if res.rows_affected() == 0 {
+                Err(AdapterError::NotFound)
+            } else {
+                Ok(())
+            }
+        })
+    }
+
     fn delete_account(
         &self,
         provider_id: &str,

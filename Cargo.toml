@@ -46,6 +46,7 @@ hkdf = "0.12"
 subtle = "2"
 rand = "0.8"
 base64 = "0.22"
+unicode-normalization = "0.1"
 
 # HTTP / Web
 axum = { version = "0.8", features = ["macros"] }

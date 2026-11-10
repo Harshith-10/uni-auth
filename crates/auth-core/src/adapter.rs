@@ -66,6 +66,16 @@ pub trait AuthAdapter: Send + Sync {
         user_id: &str,
         password_hash: &str,
     ) -> BoxFuture<'static, Result<(), AdapterError>>;
+    fn update_account_tokens(
+        &self,
+        provider_id: &str,
+        account_id: &str,
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        id_token: Option<String>,
+        access_token_expires_at: Option<OffsetDateTime>,
+        scope: Option<String>,
+    ) -> BoxFuture<'static, Result<(), AdapterError>>;
     fn delete_account(
         &self,
         provider_id: &str,
@@ -364,6 +374,40 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 } else {
                     Err(AdapterError::NotFound)
                 }
+            }
+        })
+    }
+
+    fn update_account_tokens(
+        &self,
+        provider_id: &str,
+        account_id: &str,
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        id_token: Option<String>,
+        access_token_expires_at: Option<OffsetDateTime>,
+        scope: Option<String>,
+    ) -> BoxFuture<'static, Result<(), AdapterError>> {
+        let store = Arc::clone(&self.store);
+        let key = format!("{provider_id}:{account_id}");
+        Box::pin(async move {
+            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            if let Some(account) = s.accounts.get_mut(&key) {
+                account.access_token = access_token;
+                if refresh_token.is_some() {
+                    account.refresh_token = refresh_token;
+                }
+                if id_token.is_some() {
+                    account.id_token = id_token;
+                }
+                account.access_token_expires_at = access_token_expires_at;
+                if scope.is_some() {
+                    account.scope = scope;
+                }
+                account.updated_at = OffsetDateTime::now_utc();
+                Ok(())
+            } else {
+                Err(AdapterError::NotFound)
             }
         })
     }

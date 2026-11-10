@@ -8,7 +8,7 @@ use auth_proto::{
     OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest,
     SendVerificationEmailRequest, SessionAndUserResponse, SessionWire, SignInEmailRequest,
     SignInResponse, SignOutRequest, SignOutResponse, SignUpEmailRequest, SignUpResponse,
-    StatusMessageResponse, StatusResponse, UpdateUserRequest, UpdateUserResponse,
+    StatusMessageResponse, StatusResponse, UpdateUserRequest, UpdateUserResponse, UserWire,
     VerifyEmailResponse,
 };
 
@@ -18,7 +18,8 @@ use crate::email::{EmailSender, NoopEmailSender};
 use crate::error::{AdapterError, AuthError};
 use crate::hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter};
 use crate::models::{
-    CreateAccountInput, CreateSessionInput, CreateUserInput, CreateVerificationInput, RequestMeta,
+    AccountRecord, CreateAccountInput, CreateSessionInput, CreateUserInput,
+    CreateVerificationInput, RequestMeta, SessionRecord, UserRecord,
 };
 use crate::plugin::AuthPlugin;
 
@@ -195,6 +196,67 @@ impl AuthService {
         crypto::extract_and_verify_token(&self.config.secret, signed_or_raw)
     }
 
+    /// Emits the `on_user_created` lifecycle hook (used by email and OAuth user registration).
+    pub async fn notify_user_created(&self, user: &UserWire) {
+        self.hooks.on_user_created(user).await;
+    }
+
+    /// Issues a session for `user` while executing registered `AuthPlugin` and `AuthHooks` callbacks.
+    pub async fn issue_session_for_user(
+        &self,
+        user: &UserRecord,
+        meta: RequestMeta,
+        run_before_sign_in: bool,
+    ) -> Result<SessionRecord, AuthError> {
+        let user_wire = user.to_wire();
+        if run_before_sign_in {
+            for plugin in self.plugins.iter() {
+                plugin.on_before_sign_in(&user_wire).await?;
+            }
+        }
+
+        let raw_token = crypto::generate_session_token();
+        let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
+
+        let session = self
+            .adapter
+            .create_session(CreateSessionInput {
+                id: None,
+                user_id: user.id.clone(),
+                token: raw_token,
+                expires_at,
+                ip_address: meta.ip_address,
+                user_agent: meta.user_agent,
+            })
+            .await?;
+
+        let session_wire = session.to_wire();
+        self.hooks.on_session_created(&session_wire, &user_wire).await;
+        for plugin in self.plugins.iter() {
+            plugin
+                .on_after_session_issued(&session_wire, &user_wire)
+                .await?;
+        }
+
+        Ok(session)
+    }
+
+    /// Looks up a user's `credential` account by `(provider_id = "credential", account_id = user_id)`
+    /// with a fallback scan across `find_accounts_by_user_id` for migrated Better Auth databases
+    /// where `account.account_id` differs from `user.id`.
+    async fn find_credential_account(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<AccountRecord>, AuthError> {
+        if let Some(account) = self.adapter.find_account("credential", user_id).await? {
+            return Ok(Some(account));
+        }
+        let accounts = self.adapter.find_accounts_by_user_id(user_id).await?;
+        Ok(accounts
+            .into_iter()
+            .find(|a| a.provider_id == "credential"))
+    }
+
     // ──────────────────────────────────────────────
     // Sign-Up & Sign-In
     // ──────────────────────────────────────────────
@@ -249,7 +311,7 @@ impl AuthService {
             .await?;
 
         let user_wire = user.to_wire();
-        self.hooks.on_user_created(&user_wire).await;
+        self.notify_user_created(&user_wire).await;
 
         self.adapter
             .create_account(CreateAccountInput {
@@ -299,26 +361,7 @@ impl AuthService {
         }
 
         if self.config.auto_sign_in {
-            let raw_token = crypto::generate_session_token();
-            let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
-
-            let session = self
-                .adapter
-                .create_session(CreateSessionInput {
-                    id: None,
-                    user_id: user.id.clone(),
-                    token: raw_token,
-                    expires_at,
-                    ip_address: meta.ip_address,
-                    user_agent: meta.user_agent,
-                })
-                .await?;
-
-            let session_wire = session.to_wire();
-            self.hooks.on_session_created(&session_wire, &user_wire).await;
-            for plugin in self.plugins.iter() {
-                plugin.on_after_session_issued(&session_wire, &user_wire).await?;
-            }
+            let session = self.issue_session_for_user(&user, meta, false).await?;
 
             Ok(SignUpResponse {
                 token: Some(session.token),
@@ -368,10 +411,7 @@ impl AuthService {
             }
         };
 
-        let account = self
-            .adapter
-            .find_account("credential", &user.id)
-            .await?;
+        let account = self.find_credential_account(&user.id).await?;
 
         let account = match account {
             Some(a) => a,
@@ -413,37 +453,13 @@ impl AuthService {
             return Err(AuthError::EmailNotVerified);
         }
 
-        let user_wire = user.to_wire();
-        for plugin in self.plugins.iter() {
-            plugin.on_before_sign_in(&user_wire).await?;
-        }
-
-        let raw_token = crypto::generate_session_token();
-        let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
-
-        let session = self
-            .adapter
-            .create_session(CreateSessionInput {
-                id: None,
-                user_id: user.id.clone(),
-                token: raw_token,
-                expires_at,
-                ip_address: meta.ip_address,
-                user_agent: meta.user_agent,
-            })
-            .await?;
-
-        let session_wire = session.to_wire();
-        self.hooks.on_session_created(&session_wire, &user_wire).await;
-        for plugin in self.plugins.iter() {
-            plugin.on_after_session_issued(&session_wire, &user_wire).await?;
-        }
+        let session = self.issue_session_for_user(&user, meta, true).await?;
 
         Ok(SignInResponse {
             redirect: req.callback_url.is_some(),
             token: session.token,
             url: req.callback_url,
-            user: user_wire,
+            user: user.to_wire(),
         })
     }
 
@@ -642,18 +658,13 @@ impl AuthService {
         }
 
         let identifier = format!("reset-password:{token}");
-        let preview = self
+        let consumed = self
             .adapter
-            .find_verification(&identifier)
+            .consume_verification(&identifier)
             .await?
             .ok_or(AuthError::InvalidToken)?;
 
-        if preview.is_expired() {
-            let _ = self.adapter.delete_verification(&identifier).await;
-            return Err(AuthError::InvalidToken);
-        }
-
-        let user_id = preview.value;
+        let user_id = consumed.value;
         if self.adapter.find_user_by_id(&user_id).await?.is_none() {
             return Err(AuthError::UserNotFound);
         }
@@ -661,11 +672,6 @@ impl AuthService {
         let password_hash = crypto::hash_password(req.new_password)
             .await
             .map_err(AuthError::Crypto)?;
-
-        self.adapter
-            .consume_verification(&identifier)
-            .await?
-            .ok_or(AuthError::InvalidToken)?;
 
         match self
             .adapter
@@ -717,8 +723,7 @@ impl AuthService {
         }
 
         let account = self
-            .adapter
-            .find_account("credential", user_id)
+            .find_credential_account(user_id)
             .await?
             .ok_or(AuthError::CredentialAccountNotFound)?;
 
@@ -763,18 +768,8 @@ impl AuthService {
                 .unwrap_or_default();
 
             self.adapter.delete_sessions_by_user_id(user_id).await?;
-            let fresh_raw_token = crypto::generate_session_token();
-            let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
             let new_session = self
-                .adapter
-                .create_session(CreateSessionInput {
-                    id: None,
-                    user_id: user_id.to_string(),
-                    token: fresh_raw_token,
-                    expires_at,
-                    ip_address: current_meta.ip_address,
-                    user_agent: current_meta.user_agent,
-                })
+                .issue_session_for_user(&user, current_meta, false)
                 .await?;
             Some(new_session.token)
         } else {
@@ -823,8 +818,7 @@ impl AuthService {
                 return Err(AuthError::PasswordTooLong);
             }
             let account = self
-                .adapter
-                .find_account("credential", user_id)
+                .find_credential_account(user_id)
                 .await?
                 .ok_or(AuthError::CredentialAccountNotFound)?;
             let stored_hash = account
@@ -920,21 +914,13 @@ impl AuthService {
             self.hooks.on_email_verified(uw).await;
         }
 
-        let session_token = if self.auto_sign_in_after_verification && user.is_some() {
-            let raw_token = crypto::generate_session_token();
-            let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
-            let session = self
-                .adapter
-                .create_session(CreateSessionInput {
-                    id: None,
-                    user_id: user_id.clone(),
-                    token: raw_token,
-                    expires_at,
-                    ip_address: meta.ip_address,
-                    user_agent: meta.user_agent,
-                })
-                .await?;
-            Some(session.token)
+        let session_token = if self.auto_sign_in_after_verification {
+            if let Some(ref u) = user {
+                let session = self.issue_session_for_user(u, meta, true).await?;
+                Some(session.token)
+            } else {
+                None
+            }
         } else {
             None
         };

@@ -2,10 +2,12 @@ use std::sync::Arc;
 use time::Duration;
 use tokio::net::TcpListener;
 
-use auth_axum::{auth_router, AuthState};
+use auth_axum::{auth_router, AuthState, OAuthProviderConfig};
+use auth_core::models::CreateUserInput;
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
 use auth_proto::{
-    OkResponse, OneTimeTokenGenerateResponse, SessionAndUserResponse, SignUpResponse,
+    OkResponse, OneTimeTokenGenerateResponse, SessionAndUserResponse, SignInSocialResponse,
+    SignUpResponse,
 };
 use axum::Router;
 
@@ -25,7 +27,9 @@ async fn start_test_server() -> (String, Arc<AuthService>) {
     };
 
     let service = Arc::new(AuthService::new(config, adapter));
-    let state = AuthState::new(Arc::clone(&service));
+    let mut mock_google = OAuthProviderConfig::google("mock_client_id", "mock_client_secret");
+    mock_google.token_url = "mock://google/token".to_string();
+    let state = AuthState::new(Arc::clone(&service)).with_oauth_provider(mock_google);
 
     let app = Router::new().nest("/api/auth", auth_router(state));
 
@@ -220,4 +224,141 @@ async fn test_bearer_token_flow_desktop_parity() {
         .unwrap()
         .to_string();
     assert!(!new_auth_token.is_empty());
+}
+
+#[tokio::test]
+async fn test_oauth_callback_redirect_hygiene_and_unverified_email_protection() {
+    let (base_url, service) = start_test_server().await;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    // 1. Web browser redirect (http://localhost:5173) must NOT leak ?token=<ott>
+    let init_web: SignInSocialResponse = client
+        .post(format!("{base_url}/sign-in/social"))
+        .json(&serde_json::json!({
+            "provider": "google",
+            "callbackURL": "http://localhost:5173",
+            "disableRedirect": true
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let state_param = init_web
+        .url
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+
+    let cb_web = client
+        .get(format!(
+            "{base_url}/callback/google?code=fixed_web1&state={state_param}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cb_web.status(), 307);
+    let loc_web = cb_web
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(loc_web, "http://localhost:5173");
+
+    // 2. Desktop loopback redirect (/auth/callback) MUST append ?token=<ott>
+    let init_desktop: SignInSocialResponse = client
+        .post(format!("{base_url}/sign-in/social"))
+        .json(&serde_json::json!({
+            "provider": "google",
+            "callbackURL": "http://127.0.0.1:54321/auth/callback",
+            "disableRedirect": true
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let state_desktop = init_desktop
+        .url
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+
+    let cb_desktop = client
+        .get(format!(
+            "{base_url}/callback/google?code=fixed_web1&state={state_desktop}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cb_desktop.status(), 307);
+    let loc_desktop = cb_desktop
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        loc_desktop.starts_with("http://127.0.0.1:54321/auth/callback?token="),
+        "Loopback callback must include ?token=<ott>, got: {loc_desktop}"
+    );
+
+    // 3. Unverified OAuth email must NOT auto-link to an existing user account
+    service
+        .adapter()
+        .create_user(CreateUserInput {
+            id: None,
+            name: "Victim User".to_string(),
+            email: "user_unverified_victim@example.com".to_string(),
+            image: None,
+            email_verified: true,
+        })
+        .await
+        .unwrap();
+
+    let init_unverified: SignInSocialResponse = client
+        .post(format!("{base_url}/sign-in/social"))
+        .json(&serde_json::json!({
+            "provider": "google",
+            "callbackURL": "http://localhost:5173",
+            "disableRedirect": true
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let state_unverified = init_unverified
+        .url
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+
+    let cb_unverified = client
+        .get(format!(
+            "{base_url}/callback/google?code=fixed_unverified_victim&state={state_unverified}"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cb_unverified.status(), 403);
 }

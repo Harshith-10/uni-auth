@@ -528,6 +528,54 @@ impl AuthAdapter for SqliteAuthAdapter {
         })
     }
 
+    fn update_account_tokens(
+        &self,
+        provider_id: &str,
+        account_id: &str,
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        id_token: Option<String>,
+        access_token_expires_at: Option<OffsetDateTime>,
+        scope: Option<String>,
+    ) -> BoxFuture<'static, Result<(), AdapterError>> {
+        let pool = self.pool.clone();
+        let provider_id = provider_id.to_string();
+        let account_id = account_id.to_string();
+        Box::pin(async move {
+            let now_str = format_dt(OffsetDateTime::now_utc());
+            let access_exp = format_opt_dt(access_token_expires_at);
+            let res = sqlx::query(
+                r#"
+                UPDATE "account"
+                SET access_token = ?,
+                    refresh_token = COALESCE(?, refresh_token),
+                    id_token = COALESCE(?, id_token),
+                    access_token_expires_at = ?,
+                    scope = COALESCE(?, scope),
+                    updated_at = ?
+                WHERE provider_id = ? AND account_id = ?
+                "#,
+            )
+            .bind(access_token)
+            .bind(refresh_token)
+            .bind(id_token)
+            .bind(access_exp)
+            .bind(scope)
+            .bind(now_str)
+            .bind(provider_id)
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            if res.rows_affected() == 0 {
+                Err(AdapterError::NotFound)
+            } else {
+                Ok(())
+            }
+        })
+    }
+
     fn delete_account(
         &self,
         provider_id: &str,

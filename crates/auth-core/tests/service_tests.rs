@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 
-use auth_core::adapter::AuthAdapter;
 use auth_core::crypto::hash_scrypt_better_auth;
-use auth_core::models::CreateAccountInput;
+use auth_core::models::{CreateAccountInput, CreateUserInput};
 use auth_core::{
     AuthConfig, AuthError, AuthService, EmailSender, InMemoryAuthAdapter, MockEmailSender,
     SlidingWindowRateLimiter, TotpValidator,
@@ -495,6 +494,72 @@ async fn test_scrypt_migration_and_account_unlink_and_user_lifecycle() {
         .await
         .unwrap();
     assert!(service.get_session(&rotated_token).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_credential_account_with_distinct_account_id() {
+    let (service, _) = create_test_service();
+
+    let user = service
+        .adapter()
+        .create_user(CreateUserInput {
+            id: Some("usr_migrated_1".to_string()),
+            name: "Migrated Credential User".to_string(),
+            email: "migrated_cred@example.com".to_string(),
+            image: None,
+            email_verified: true,
+        })
+        .await
+        .unwrap();
+
+    let scrypt_hash =
+        hash_scrypt_better_auth("aabbccddeeff00112233445566778899", "caf\u{00e9}-password-99")
+            .unwrap();
+
+    // Create a credential account where account_id != user.id
+    service
+        .adapter()
+        .create_account(CreateAccountInput {
+            id: Some("acc_custom_1".to_string()),
+            user_id: user.id.clone(),
+            account_id: "custom_cred_account_id".to_string(),
+            provider_id: "credential".to_string(),
+            password: Some(scrypt_hash),
+            access_token: None,
+            refresh_token: None,
+            id_token: None,
+            access_token_expires_at: None,
+            refresh_token_expires_at: None,
+            scope: None,
+        })
+        .await
+        .unwrap();
+
+    // Sign in using decomposed UTF-8 password ("cafe\u{0301}") and verify lookup + NFKC scrypt rehashing
+    let signin = service
+        .sign_in_email(SignInEmailRequest {
+            email: "migrated_cred@example.com".to_string(),
+            password: "cafe\u{0301}-password-99".to_string(),
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .expect("Sign-in should locate credential account by user_id and verify NFKC scrypt");
+
+    // Change password also works when account_id != user.id
+    let changed = service
+        .change_password(
+            &user.id,
+            &signin.token,
+            ChangePasswordRequest {
+                current_password: "caf\u{00e9}-password-99".to_string(),
+                new_password: "new-password-8888".to_string(),
+                revoke_other_sessions: Some(false),
+            },
+        )
+        .await
+        .expect("change_password should locate credential account by user_id");
+    assert_eq!(changed.user.id, user.id);
 }
 
 #[test]

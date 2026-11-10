@@ -6,7 +6,7 @@ use serde::Deserialize;
 use time::{Duration, OffsetDateTime};
 
 use auth_core::models::{
-    CreateAccountInput, CreateSessionInput, CreateUserInput, CreateVerificationInput,
+    CreateAccountInput, CreateUserInput, CreateVerificationInput,
 };
 use auth_proto::{
     AuthErrorResponse, LinkSocialRequest, SignInSocialRequest, SignInSocialResponse,
@@ -59,7 +59,7 @@ pub async fn sign_in_social(
         .adapter()
         .create_verification(CreateVerificationInput {
             id: None,
-            identifier: format!("oauth-state:{oauth_state}"),
+            identifier: format!("auth-state:{oauth_state}"),
             value: state_payload,
             expires_at,
         })
@@ -148,7 +148,7 @@ pub async fn link_social(
         .adapter()
         .create_verification(CreateVerificationInput {
             id: None,
-            identifier: format!("oauth-state:{oauth_state}"),
+            identifier: format!("auth-state:{oauth_state}"),
             value: state_payload,
             expires_at,
         })
@@ -234,15 +234,20 @@ async fn exchange_oauth_code_and_fetch_profile(
 ) -> Result<OAuthProfileResult, String> {
     // Allow deterministic mock/simulated mode when token_url starts with "mock://" or in local test fixtures
     if provider.token_url.starts_with("mock://") || provider.token_url.contains("127.0.0.1:0") {
-        let suffix = auth_core::crypto::generate_random_token(6).to_lowercase();
+        let unverified = provider.token_url.contains("unverified") || code.contains("unverified");
+        let suffix = if let Some(rest) = code.strip_prefix("fixed_") {
+            rest.to_lowercase()
+        } else {
+            auth_core::crypto::generate_random_token(6).to_lowercase()
+        };
         return Ok(OAuthProfileResult {
             account_id: format!("oauth_acc_{suffix}"),
             email: format!("user_{suffix}@example.com"),
             name: format!("OAuth User ({})", provider.provider_id),
             image: None,
-            email_verified: true,
+            email_verified: !unverified,
             access_token: format!("mock_access_{code}"),
-            refresh_token: None,
+            refresh_token: Some(format!("mock_refresh_{code}")),
             id_token: None,
             access_token_expires_at: None,
             scope: Some(provider.scopes.join(",")),
@@ -358,7 +363,7 @@ async fn exchange_oauth_code_and_fetch_profile(
     let email_verified = profile
         .get("email_verified")
         .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+        .unwrap_or(false);
 
     Ok(OAuthProfileResult {
         account_id,
@@ -372,6 +377,12 @@ async fn exchange_oauth_code_and_fetch_profile(
         access_token_expires_at,
         scope,
     })
+}
+
+/// Returns `true` if `url` is a native desktop loopback callback (e.g. `http://127.0.0.1:{port}/auth/callback`).
+fn is_loopback_ott_callback(url: &str) -> bool {
+    let without_query = url.split('?').next().unwrap_or(url).trim_end_matches('/');
+    without_query.ends_with("/auth/callback") || url.contains("loopback=1")
 }
 
 pub async fn oauth_callback(
@@ -412,16 +423,21 @@ pub async fn oauth_callback(
         }
     };
 
-    let verification_id = format!("oauth-state:{oauth_state}");
-    let record = match state.service.adapter().consume_verification(&verification_id).await {
+    // Match upstream `auth-state:{state}` identifier while supporting legacy `oauth-state:{state}`
+    let primary_id = format!("auth-state:{oauth_state}");
+    let legacy_id = format!("oauth-state:{oauth_state}");
+    let record = match state.service.adapter().consume_verification(&primary_id).await {
         Ok(Some(r)) => r,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(AuthErrorResponse::new("INVALID_STATE", "OAuth state not found or expired").with_status(400)),
-            )
-                .into_response();
-        }
+        _ => match state.service.adapter().consume_verification(&legacy_id).await {
+            Ok(Some(r)) => r,
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(AuthErrorResponse::new("INVALID_STATE", "OAuth state not found or expired").with_status(400)),
+                )
+                    .into_response();
+            }
+        },
     };
 
     let state_data: serde_json::Value = serde_json::from_str(&record.value).unwrap_or_default();
@@ -503,6 +519,19 @@ pub async fn oauth_callback(
             if existing_acc.user_id != target_user_id {
                 return error_to_response(auth_core::AuthError::SocialAccountAlreadyLinked);
             }
+            let _ = state
+                .service
+                .adapter()
+                .update_account_tokens(
+                    &provider_name,
+                    &profile.account_id,
+                    Some(profile.access_token),
+                    profile.refresh_token,
+                    profile.id_token,
+                    profile.access_token_expires_at,
+                    profile.scope,
+                )
+                .await;
         } else {
             let _ = state
                 .service
@@ -537,6 +566,20 @@ pub async fn oauth_callback(
         .find_account(&provider_name, &profile.account_id)
         .await
     {
+        let _ = state
+            .service
+            .adapter()
+            .update_account_tokens(
+                &provider_name,
+                &profile.account_id,
+                Some(profile.access_token),
+                profile.refresh_token,
+                profile.id_token,
+                profile.access_token_expires_at,
+                profile.scope,
+            )
+            .await;
+
         match state
             .service
             .adapter()
@@ -559,7 +602,29 @@ pub async fn oauth_callback(
             .find_user_by_email(&profile.email)
             .await
         {
-            Ok(Some(existing)) => existing,
+            Ok(Some(mut existing)) => {
+                // Prevent implicit account takeover when provider email is not verified
+                if !profile.email_verified {
+                    if let Some(err_cb) = error_callback_url {
+                        let sep = if err_cb.contains('?') { "&" } else { "?" };
+                        return Redirect::temporary(&format!(
+                            "{err_cb}{sep}error=EMAIL_NOT_VERIFIED"
+                        ))
+                        .into_response();
+                    }
+                    return error_to_response(auth_core::AuthError::EmailNotVerified);
+                }
+
+                if !existing.email_verified {
+                    let _ = state
+                        .service
+                        .adapter()
+                        .update_user_email_verified(&existing.id, true)
+                        .await;
+                    existing.email_verified = true;
+                }
+                existing
+            }
             _ => {
                 is_new_user = true;
                 let created = state
@@ -576,7 +641,10 @@ pub async fn oauth_callback(
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response());
 
                 match created {
-                    Ok(u) => u,
+                    Ok(u) => {
+                        state.service.notify_user_created(&u.to_wire()).await;
+                        u
+                    }
                     Err(res) => return res,
                 }
             }
@@ -603,42 +671,27 @@ pub async fn oauth_callback(
         user
     };
 
-    // Issue session
-    let raw_token = auth_core::crypto::generate_session_token();
-    let expires_at = OffsetDateTime::now_utc() + state.service.config().session_expires_in;
-
+    // Issue session through AuthService so AuthPlugin and AuthHooks run consistently
     let session = match state
         .service
-        .adapter()
-        .create_session(CreateSessionInput {
-            id: None,
-            user_id: user.id.clone(),
-            token: raw_token.clone(),
-            expires_at,
-            ip_address: meta.ip_address,
-            user_agent: meta.user_agent,
-        })
+        .issue_session_for_user(&user, meta, true)
         .await
     {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(err) => {
+            if let Some(err_cb) = error_callback_url {
+                let sep = if err_cb.contains('?') { "&" } else { "?" };
+                return Redirect::temporary(&format!(
+                    "{err_cb}{sep}error={}",
+                    err.error_code()
+                ))
+                .into_response();
+            }
+            return error_to_response(err);
+        }
     };
 
     let signed_token = state.service.sign_token(&session.token);
-
-    // Generate a one-time token for browser-to-desktop handoff
-    let ott = auth_core::crypto::generate_random_token(32);
-    let ott_exp = OffsetDateTime::now_utc() + state.service.config().ott_expires_in;
-    let _ = state
-        .service
-        .adapter()
-        .create_verification(CreateVerificationInput {
-            id: None,
-            identifier: format!("one-time-token:{ott}"),
-            value: session.token.clone(),
-            expires_at: ott_exp,
-        })
-        .await;
 
     let redirect_target = if is_new_user {
         new_user_callback_url.or(callback_url)
@@ -647,8 +700,25 @@ pub async fn oauth_callback(
     };
 
     if let Some(target) = redirect_target {
-        let separator = if target.contains('?') { "&" } else { "?" };
-        let redirect_url = format!("{target}{separator}token={ott}");
+        let redirect_url = if is_loopback_ott_callback(&target) {
+            let ott = auth_core::crypto::generate_random_token(32);
+            let ott_exp = OffsetDateTime::now_utc() + state.service.config().ott_expires_in;
+            let _ = state
+                .service
+                .adapter()
+                .create_verification(CreateVerificationInput {
+                    id: None,
+                    identifier: format!("one-time-token:{ott}"),
+                    value: session.token.clone(),
+                    expires_at: ott_exp,
+                })
+                .await;
+            let separator = if target.contains('?') { "&" } else { "?" };
+            format!("{target}{separator}token={ott}")
+        } else {
+            target
+        };
+
         let mut response = Redirect::temporary(&redirect_url).into_response();
 
         let cookie = build_session_cookie(
@@ -666,6 +736,19 @@ pub async fn oauth_callback(
         }
         response
     } else {
+        let ott = auth_core::crypto::generate_random_token(32);
+        let ott_exp = OffsetDateTime::now_utc() + state.service.config().ott_expires_in;
+        let _ = state
+            .service
+            .adapter()
+            .create_verification(CreateVerificationInput {
+                id: None,
+                identifier: format!("one-time-token:{ott}"),
+                value: session.token.clone(),
+                expires_at: ott_exp,
+            })
+            .await;
+
         let mut response = (
             StatusCode::OK,
             Json(serde_json::json!({
