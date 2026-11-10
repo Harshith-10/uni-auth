@@ -11,7 +11,7 @@ use time::Duration;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use auth_axum::{auth_routes, build_auth_cors_layer, AuthState, CurrentSession};
+use auth_axum::{auth_routes, build_auth_cors_layer, AuthState, CurrentSession, OAuthProviderConfig};
 use auth_core::{AuthConfig, AuthService};
 use auth_sqlx::SqliteAuthAdapter;
 use axum::response::{IntoResponse, Response};
@@ -39,15 +39,44 @@ async fn saas_me(session: CurrentSession) -> Response {
     .into_response()
 }
 
+/// Helper to parse .env from the working directory or workspace root into a HashMap.
+fn load_env_map() -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let candidates = [".env", "../../.env"];
+    for path in candidates {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((k, v)) = line.split_once('=') {
+                    let k = k.trim().to_string();
+                    let v = v.trim().trim_matches('"').trim_matches('\'').to_string();
+                    map.insert(k, v);
+                }
+            }
+            break;
+        }
+    }
+    map
+}
+
+fn get_env(key: &str, env_map: &std::collections::HashMap<String, String>) -> Option<String> {
+    std::env::var(key).ok().or_else(|| env_map.get(key).cloned())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let env_map = load_env_map();
+
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     // 1. Initialize SQLite persistence
-    let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite::memory:".to_string());
+    let db_path = get_env("DATABASE_URL", &env_map).unwrap_or_else(|| "sqlite::memory:".to_string());
     tracing::info!("Connecting to SQLite database: {}", db_path);
 
     let adapter = if db_path == "sqlite::memory:" {
@@ -62,16 +91,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 2. Configure AuthService
-    let secret = std::env::var("UNI_AUTH_SECRET")
-        .unwrap_or_else(|_| "uni-auth-super-secret-development-key-32-chars".to_string())
+    let secret = get_env("UNI_AUTH_SECRET", &env_map)
+        .unwrap_or_else(|| "uni-auth-super-secret-development-key-32-chars".to_string())
         .into_bytes();
 
-    let port: u16 = std::env::var("PORT")
-        .ok()
+    let port: u16 = get_env("PORT", &env_map)
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
 
-    let base_url = format!("http://127.0.0.1:{port}/api/auth");
+    let base_url = get_env("AUTH_BASE_URL", &env_map)
+        .unwrap_or_else(|| format!("http://localhost:{port}/api/auth"));
 
     let config = AuthConfig {
         secret,
@@ -87,7 +116,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let service = Arc::new(AuthService::new(config, adapter));
-    let auth_state = AuthState::new(Arc::clone(&service));
+    let mut auth_state = AuthState::new(Arc::clone(&service));
+
+    let mut configured_providers = Vec::new();
+    if let (Some(client_id), Some(client_secret)) = (
+        get_env("GOOGLE_CLIENT_ID", &env_map),
+        get_env("GOOGLE_CLIENT_SECRET", &env_map),
+    ) {
+        let id = client_id.trim();
+        let sec = client_secret.trim();
+        if !id.is_empty() && !sec.is_empty() {
+            auth_state = auth_state.with_oauth_provider(OAuthProviderConfig::google(id, sec));
+            configured_providers.push("google");
+        }
+    }
+
+    if let (Some(client_id), Some(client_secret)) = (
+        get_env("GITHUB_CLIENT_ID", &env_map),
+        get_env("GITHUB_CLIENT_SECRET", &env_map),
+    ) {
+        let id = client_id.trim();
+        let sec = client_secret.trim();
+        if !id.is_empty() && !sec.is_empty() {
+            auth_state = auth_state.with_oauth_provider(OAuthProviderConfig::github(id, sec));
+            configured_providers.push("github");
+        }
+    }
+
+    if configured_providers.is_empty() {
+        tracing::warn!("⚠️ No OAuth providers configured. Set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in .env to enable Google OAuth");
+    } else {
+        tracing::info!("🔑 OAuth providers registered: {:?}", configured_providers);
+    }
 
     // 3. Build Axum App with CORS
     let cors = build_auth_cors_layer(&[

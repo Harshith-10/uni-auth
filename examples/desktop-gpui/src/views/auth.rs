@@ -160,7 +160,15 @@ impl AuthFormView {
                     )
                     .child(Separator::horizontal())
                     .child(
-                        Button::new("social-oauth-btn")
+                        Button::new("social-oauth-google-btn")
+                            .label("Continue with Google (Browser Loopback)")
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.social_login("google", window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("social-oauth-github-btn")
                             .label("Continue with GitHub (Browser Loopback)")
                             .outline()
                             .on_click(cx.listener(|this, _, window, cx| {
