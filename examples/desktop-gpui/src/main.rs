@@ -1,6 +1,6 @@
 use auth_client::{AuthStore, BetterAuthNativeClient, KeyringTokenStorage};
-use desktop_gpui::{DesktopAuthApp, tokio_handle};
-use gpui_kit::{AppContext, Bounds, Point, Size, WindowBounds, WindowOptions, px};
+use desktop_gpui::{tokio_handle, DesktopAuthApp};
+use gpui_kit::{px, AppContext, Bounds, Point, Size, WindowBounds, WindowOptions};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -44,12 +44,12 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds {
                         origin: Point {
-                            x: px(200.),
-                            y: px(200.),
+                            x: px(160.),
+                            y: px(120.),
                         },
                         size: Size {
-                            width: px(800.),
-                            height: px(600.),
+                            width: px(920.),
+                            height: px(760.),
                         },
                     })),
                     ..Default::default()

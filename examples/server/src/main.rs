@@ -4,15 +4,20 @@
 //! 1. React Web application (Cookie-based auth)
 //! 2. GPUI Native Desktop application (Bearer token + Keychain auth)
 //!
-//! Also exposes a protected demo SaaS route `GET /api/saas/me`.
+//! Seeds demo user accounts on startup (`admin@example.com`, `alice@example.com`,
+//! `bob@example.com`, `banned@example.com`) and exposes a protected demo SaaS
+//! route `GET /api/saas/me`.
 
 use std::sync::Arc;
 use time::Duration;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use auth_axum::{auth_routes, build_auth_cors_layer, AuthState, CurrentSession, OAuthProviderConfig};
-use auth_core::{AuthConfig, AuthService};
+use auth_axum::{
+    auth_routes, build_auth_cors_layer, AuthState, CurrentSession, OAuthProviderConfig,
+};
+use auth_core::{AdminUpdateUserFields, AuthConfig, AuthService};
+use auth_proto::{AdminCreateUserRequest, RoleValue};
 use auth_sqlx::SqliteAuthAdapter;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -34,9 +39,108 @@ async fn saas_me(session: CurrentSession) -> Response {
             "id": session.session.id,
             "expiresAt": session.session.expires_at,
             "createdAt": session.session.created_at,
+            "impersonatedBy": session.session.impersonated_by,
         }
     }))
     .into_response()
+}
+
+/// Idempotently seeds demo user accounts into the database on startup so
+/// developers can immediately sign in and test Admin and standard user flows.
+async fn seed_demo_accounts(service: &AuthService) -> Result<(), Box<dyn std::error::Error>> {
+    struct SeedAccount {
+        name: &'static str,
+        email: &'static str,
+        password: &'static str,
+        role: &'static str,
+        email_verified: bool,
+        banned: bool,
+        ban_reason: Option<&'static str>,
+    }
+
+    let accounts = [
+        SeedAccount {
+            name: "Admin User",
+            email: "admin@example.com",
+            password: "admin12345",
+            role: "admin",
+            email_verified: true,
+            banned: false,
+            ban_reason: None,
+        },
+        SeedAccount {
+            name: "Alice Wonderland",
+            email: "alice@example.com",
+            password: "password123",
+            role: "user",
+            email_verified: true,
+            banned: false,
+            ban_reason: None,
+        },
+        SeedAccount {
+            name: "Bob Builder",
+            email: "bob@example.com",
+            password: "password123",
+            role: "user",
+            email_verified: false,
+            banned: false,
+            ban_reason: None,
+        },
+        SeedAccount {
+            name: "Banned Account",
+            email: "banned@example.com",
+            password: "password123",
+            role: "user",
+            email_verified: true,
+            banned: true,
+            ban_reason: Some("Terms of service violation"),
+        },
+    ];
+
+    for acct in accounts {
+        if service
+            .adapter()
+            .get_user_by_email(acct.email)
+            .await?
+            .is_some()
+        {
+            continue;
+        }
+
+        let created = service
+            .admin_create_user(AdminCreateUserRequest {
+                email: acct.email.to_string(),
+                password: Some(acct.password.to_string()),
+                name: acct.name.to_string(),
+                role: Some(RoleValue::Single(acct.role.to_string())),
+                data: Some(serde_json::json!({
+                    "emailVerified": acct.email_verified,
+                })),
+            })
+            .await?;
+
+        if acct.banned {
+            service
+                .adapter()
+                .update_user_admin(
+                    &created.id,
+                    AdminUpdateUserFields {
+                        banned: Some(true),
+                        ban_reason: Some(acct.ban_reason.map(|s| s.to_string())),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+    }
+
+    tracing::info!("🌱 Seeded demo accounts:");
+    tracing::info!("   • Admin:  admin@example.com  / admin12345  (role: admin)");
+    tracing::info!("   • User 1: alice@example.com  / password123 (role: user, verified)");
+    tracing::info!("   • User 2: bob@example.com    / password123 (role: user, unverified)");
+    tracing::info!("   • Banned: banned@example.com / password123 (role: user, banned)");
+
+    Ok(())
 }
 
 /// Helper to parse .env from the working directory or workspace root into a HashMap.
@@ -71,12 +175,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_map = load_env_map();
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     // 1. Initialize SQLite persistence
-    let db_path = get_env("DATABASE_URL", &env_map).unwrap_or_else(|| "sqlite::memory:".to_string());
+    let db_path =
+        get_env("DATABASE_URL", &env_map).unwrap_or_else(|| "sqlite::memory:".to_string());
     tracing::info!("Connecting to SQLite database: {}", db_path);
 
     let adapter = if db_path == "sqlite::memory:" {
@@ -116,6 +223,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let service = Arc::new(AuthService::new(config, adapter));
+
+    // Seed demo accounts on startup
+    seed_demo_accounts(&service).await?;
+
     let mut auth_state = AuthState::new(Arc::clone(&service));
 
     let mut configured_providers = Vec::new();

@@ -5,12 +5,13 @@ use tokio::net::TcpListener;
 use auth_axum::{auth_router, AuthState};
 use auth_client::{AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage, TokenStorage};
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
+use auth_proto::{AdminCreateUserRequest, RoleValue};
 use axum::Router;
-use desktop_gpui::DesktopAuthApp;
+use desktop_gpui::{DashboardTab, DesktopAuthApp};
 use gpui_kit::component::Root;
 use gpui_kit::{AppContext as _, TestAppContext};
 
-async fn start_test_server() -> (String, String) {
+async fn start_test_server() -> (String, String, Arc<AuthService>) {
     let adapter = Arc::new(InMemoryAuthAdapter::new());
     let config = AuthConfig {
         secret: b"desktop-gpui-headless-test-secret-32b".to_vec(),
@@ -26,7 +27,7 @@ async fn start_test_server() -> (String, String) {
     };
 
     let service = Arc::new(AuthService::new(config, adapter));
-    let state = AuthState::new(service);
+    let state = AuthState::new(Arc::clone(&service));
 
     let app = Router::new().nest("/api/auth", auth_router(state));
 
@@ -39,7 +40,7 @@ async fn start_test_server() -> (String, String) {
         axum::serve(listener, app).await.unwrap();
     });
 
-    (server_url, auth_base_url)
+    (server_url, auth_base_url, service)
 }
 
 #[gpui_kit::test]
@@ -50,7 +51,7 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
 
     cx.update(gpui_kit::init);
 
-    let (server_url, auth_base_url) = start_test_server().await;
+    let (server_url, auth_base_url, service) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
     let client = Arc::new(BetterAuthNativeClient::new(
         auth_base_url,
@@ -58,9 +59,26 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
     ));
     let store = AuthStore::new(client);
 
-    // Pre-create user account so we can test sign-in flow
+    // Seed an admin account to test both sign-in and Admin Console loading
+    service
+        .admin_create_user(AdminCreateUserRequest {
+            email: "admin@example.com".to_string(),
+            password: Some("admin12345".to_string()),
+            name: "Admin User".to_string(),
+            role: Some(RoleValue::Single("admin".to_string())),
+            data: None,
+        })
+        .await
+        .expect("Seed admin user should succeed");
+
+    // Pre-create standard user account as well
     store
-        .sign_up_email("GPUI Tester", "gpui_test@example.com", "password123", Some(true))
+        .sign_up_email(
+            "GPUI Tester",
+            "gpui_test@example.com",
+            "password123",
+            Some(true),
+        )
         .await
         .expect("Sign up should succeed");
 
@@ -89,22 +107,20 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
         assert_eq!(view.store.status(), AuthStatus::Unauthenticated);
     });
 
-    // Populate credentials in the input fields
+    // Populate credentials using fill_demo_account helper
     cx.update(|window, cx| {
         app.update(cx, |view, cx| {
-            view.email_input.update(cx, |input, cx| {
-                input.set_value("gpui_test@example.com", window, cx);
-            });
-            view.password_input.update(cx, |input, cx| {
-                input.set_value("password123", window, cx);
-            });
+            view.fill_demo_account("admin@example.com", "admin12345", window, cx);
         });
     });
 
     // Verify inputs have the expected values
     app.read_with(cx, |view, cx| {
-        assert_eq!(view.email_input.read(cx).value().as_ref(), "gpui_test@example.com");
-        assert_eq!(view.password_input.read(cx).value().as_ref(), "password123");
+        assert_eq!(
+            view.email_input.read(cx).value().as_ref(),
+            "admin@example.com"
+        );
+        assert_eq!(view.password_input.read(cx).value().as_ref(), "admin12345");
     });
 
     // Submit the form
@@ -128,21 +144,34 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
             break;
         }
     }
-    assert!(authenticated, "Expected AuthStatus::Authenticated, but timed out waiting for authentication");
+    assert!(
+        authenticated,
+        "Expected AuthStatus::Authenticated, but timed out waiting for authentication"
+    );
 
-    // Verify successful authentication transition
-    app.read_with(cx, |view, _| {
-        match view.store.status() {
-            AuthStatus::Authenticated { user, session } => {
-                assert_eq!(user.email, "gpui_test@example.com");
-                assert_eq!(user.name, "GPUI Tester");
-                assert!(!session.token.is_empty());
-            }
-            other => panic!("Expected AuthStatus::Authenticated, got {:?}", other),
-        }
+    // Switch to Admin tab and verify admin users list populates
+    cx.update(|window, cx| {
+        app.update(cx, |view, cx| {
+            view.set_tab(DashboardTab::Admin, window, cx);
+        });
     });
 
-    // Refresh sessions and test sign-out
+    let mut admin_loaded = false;
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cx.run_until_parked();
+        app.read_with(cx, |view, _| {
+            if view.admin_users_total >= 2 {
+                admin_loaded = true;
+            }
+        });
+        if admin_loaded {
+            break;
+        }
+    }
+    assert!(admin_loaded, "Expected admin_users_total >= 2 in Admin tab");
+
+    // Sign out
     cx.update(|window, cx| {
         app.update(cx, |view, cx| {
             view.sign_out(window, cx);
@@ -162,5 +191,8 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
             break;
         }
     }
-    assert!(signed_out, "Expected AuthStatus::Unauthenticated after sign out");
+    assert!(
+        signed_out,
+        "Expected AuthStatus::Unauthenticated after sign out"
+    );
 }
