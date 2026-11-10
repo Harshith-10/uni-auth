@@ -264,6 +264,51 @@ impl AuthAdapter for PostgresAuthAdapter {
         })
     }
 
+    fn update_user_profile(
+        &self,
+        id: &str,
+        name: Option<String>,
+        image: Option<String>,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        let pool = self.pool.clone();
+        let id = id.to_string();
+        Box::pin(async move {
+            let current_row = sqlx::query(r#"SELECT * FROM "user" WHERE id = $1"#)
+                .bind(&id)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?
+                .ok_or(AdapterError::NotFound)?;
+
+            let current = map_user_row(current_row)?;
+            let new_name = name.unwrap_or(current.name);
+            let new_image = match image {
+                Some(img) if img.is_empty() => None,
+                Some(img) => Some(img),
+                None => current.image,
+            };
+            let now = OffsetDateTime::now_utc();
+
+            let row = sqlx::query(
+                r#"
+                UPDATE "user"
+                SET name = $1, image = $2, updated_at = $3
+                WHERE id = $4
+                RETURNING *
+                "#,
+            )
+            .bind(&new_name)
+            .bind(&new_image)
+            .bind(now)
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            map_user_row(row)
+        })
+    }
+
     fn delete_user(&self, id: &str) -> BoxFuture<'static, Result<(), AdapterError>> {
         let pool = self.pool.clone();
         let id = id.to_string();

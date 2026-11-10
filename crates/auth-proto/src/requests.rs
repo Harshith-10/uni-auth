@@ -117,6 +117,40 @@ pub struct SignInSocialRequest {
     pub login_hint: Option<String>,
 }
 
+/// `POST /api/auth/link-social`
+///
+/// Reference: `.reference/better-auth/.../account.ts` lines 128-235
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkSocialRequest {
+    /// OAuth provider identifier (e.g., "google", "github")
+    pub provider: String,
+
+    /// Callback URL to redirect to after linking
+    #[serde(
+        rename = "callbackURL",
+        alias = "callbackUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub callback_url: Option<String>,
+
+    /// Callback URL on error
+    #[serde(
+        rename = "errorCallbackURL",
+        alias = "errorCallbackUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub error_callback_url: Option<String>,
+
+    /// Disable automatic redirection to the provider
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_redirect: Option<bool>,
+
+    /// Additional OAuth scopes to request when linking
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
+}
+
 // ──────────────────────────────────────────────
 // Password Management
 // ──────────────────────────────────────────────
@@ -234,7 +268,7 @@ pub struct OneTimeTokenVerifyRequest {
 }
 
 // ──────────────────────────────────────────────
-// Account Management
+// Account & User Management
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/unlink-account`
@@ -250,4 +284,36 @@ pub struct UnlinkAccountRequest {
     /// Optional Better Auth account ID or provider account ID to unlink
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+}
+
+/// `POST /api/auth/update-user`
+///
+/// Reference: `.reference/better-auth/.../update-user.ts` lines 31-95
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateUserRequest {
+    /// Updated display name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Updated profile image URL (`Some(None)` or `None` clears or leaves unchanged)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+}
+
+/// `POST /api/auth/delete-user`
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteUserRequest {
+    /// Optional current password verification before deleting the user
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+
+    /// Optional callback URL after deletion
+    #[serde(
+        rename = "callbackURL",
+        alias = "callbackUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub callback_url: Option<String>,
 }

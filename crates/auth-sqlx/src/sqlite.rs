@@ -325,6 +325,55 @@ impl AuthAdapter for SqliteAuthAdapter {
         })
     }
 
+    fn update_user_profile(
+        &self,
+        id: &str,
+        name: Option<String>,
+        image: Option<String>,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        let pool = self.pool.clone();
+        let id = id.to_string();
+        Box::pin(async move {
+            let current_row = sqlx::query(r#"SELECT * FROM "user" WHERE id = ?"#)
+                .bind(&id)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?
+                .ok_or(AdapterError::NotFound)?;
+
+            let current = map_user_row(current_row)?;
+            let new_name = name.unwrap_or(current.name);
+            let new_image = match image {
+                Some(img) if img.is_empty() => None,
+                Some(img) => Some(img),
+                None => current.image,
+            };
+            let now = OffsetDateTime::now_utc();
+            let now_str = format_dt(now);
+
+            sqlx::query(
+                r#"UPDATE "user" SET name = ?, image = ?, updated_at = ? WHERE id = ?"#,
+            )
+            .bind(&new_name)
+            .bind(&new_image)
+            .bind(&now_str)
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            Ok(UserRecord {
+                id,
+                name: new_name,
+                email: current.email,
+                email_verified: current.email_verified,
+                image: new_image,
+                created_at: current.created_at,
+                updated_at: now,
+            })
+        })
+    }
+
     fn delete_user(&self, id: &str) -> BoxFuture<'static, Result<(), AdapterError>> {
         let pool = self.pool.clone();
         let id = id.to_string();

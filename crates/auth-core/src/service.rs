@@ -4,11 +4,12 @@ use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 
 use auth_proto::{
-    AccountListEntryWire, ChangePasswordRequest, ChangePasswordResponse,
+    AccountListEntryWire, ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest,
     OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest,
     SendVerificationEmailRequest, SessionAndUserResponse, SessionWire, SignInEmailRequest,
     SignInResponse, SignOutRequest, SignOutResponse, SignUpEmailRequest, SignUpResponse,
-    StatusMessageResponse, StatusResponse, VerifyEmailResponse,
+    StatusMessageResponse, StatusResponse, UpdateUserRequest, UpdateUserResponse,
+    VerifyEmailResponse,
 };
 
 use crate::adapter::AuthAdapter;
@@ -76,6 +77,7 @@ pub struct AuthService {
     config: AuthConfig,
     adapter: Arc<dyn AuthAdapter>,
     email_sender: Arc<dyn EmailSender>,
+    auto_sign_in_after_verification: bool,
 }
 
 impl AuthService {
@@ -84,12 +86,23 @@ impl AuthService {
             config,
             adapter,
             email_sender: Arc::new(NoopEmailSender),
+            auto_sign_in_after_verification: false,
         }
     }
 
     pub fn with_email_sender(mut self, email_sender: Arc<dyn EmailSender>) -> Self {
         self.email_sender = email_sender;
         self
+    }
+
+    /// Configures whether verifying an email address automatically issues a session token.
+    pub fn with_auto_sign_in_after_verification(mut self, enabled: bool) -> Self {
+        self.auto_sign_in_after_verification = enabled;
+        self
+    }
+
+    pub fn auto_sign_in_after_verification(&self) -> bool {
+        self.auto_sign_in_after_verification
     }
 
     pub fn config(&self) -> &AuthConfig {
@@ -507,7 +520,6 @@ impl AuthService {
         }
 
         let identifier = format!("reset-password:{token}");
-        // Look up the verification record without burning it until password hashing succeeds
         let preview = self
             .adapter
             .find_verification(&identifier)
@@ -541,7 +553,6 @@ impl AuthService {
         {
             Ok(()) => {}
             Err(AdapterError::NotFound) => {
-                // Support setting a credential password for users who registered via OAuth
                 self.adapter
                     .create_account(CreateAccountInput {
                         id: None,
@@ -630,7 +641,6 @@ impl AuthService {
                 })
                 .unwrap_or_default();
 
-            // Rotate session and revoke all existing sessions per Better Auth update-user.ts
             self.adapter.delete_sessions_by_user_id(user_id).await?;
             let fresh_raw_token = crypto::generate_session_token();
             let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
@@ -653,6 +663,64 @@ impl AuthService {
         Ok(ChangePasswordResponse {
             token,
             user: user.to_wire(),
+        })
+    }
+
+    // ──────────────────────────────────────────────
+    // User Profile & Account Deletion
+    // ──────────────────────────────────────────────
+
+    /// Updates a user's profile (`name` and/or `image`).
+    pub async fn update_user(
+        &self,
+        user_id: &str,
+        req: UpdateUserRequest,
+    ) -> Result<UpdateUserResponse, AuthError> {
+        let updated = self
+            .adapter
+            .update_user_profile(user_id, req.name, req.image)
+            .await
+            .map_err(|e| match e {
+                AdapterError::NotFound => AuthError::UserNotFound,
+                other => AuthError::Adapter(other),
+            })?;
+
+        Ok(UpdateUserResponse {
+            status: true,
+            user: Some(updated.to_wire()),
+        })
+    }
+
+    /// Deletes a user account (verifying current password if supplied) and cascades all sessions/accounts.
+    pub async fn delete_user(
+        &self,
+        user_id: &str,
+        req: DeleteUserRequest,
+    ) -> Result<StatusMessageResponse, AuthError> {
+        if let Some(password) = req.password {
+            if password.len() > self.config.max_password_length {
+                return Err(AuthError::PasswordTooLong);
+            }
+            let account = self
+                .adapter
+                .find_account("credential", user_id)
+                .await?
+                .ok_or(AuthError::CredentialAccountNotFound)?;
+            let stored_hash = account
+                .password
+                .ok_or(AuthError::CredentialAccountNotFound)?;
+            let valid = crypto::verify_password(stored_hash, password)
+                .await
+                .map_err(AuthError::Crypto)?;
+            if !valid {
+                return Err(AuthError::InvalidPassword);
+            }
+        }
+
+        self.adapter.delete_user(user_id).await?;
+        Ok(StatusMessageResponse {
+            status: true,
+            message: "User deleted".to_string(),
         })
     }
 
@@ -702,6 +770,16 @@ impl AuthService {
 
     /// Verifies email via token.
     pub async fn verify_email(&self, token: &str) -> Result<VerifyEmailResponse, AuthError> {
+        self.verify_email_with_meta(token, RequestMeta::default())
+            .await
+    }
+
+    /// Verifies email via token and optionally issues a session when `auto_sign_in_after_verification` is enabled.
+    pub async fn verify_email_with_meta(
+        &self,
+        token: &str,
+        meta: RequestMeta,
+    ) -> Result<VerifyEmailResponse, AuthError> {
         let identifier = format!("verify-email:{token}");
         let record = self
             .adapter
@@ -715,9 +793,29 @@ impl AuthService {
             .await?;
 
         let user = self.adapter.find_user_by_id(&user_id).await?;
+        let session_token = if self.auto_sign_in_after_verification && user.is_some() {
+            let raw_token = crypto::generate_session_token();
+            let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
+            let session = self
+                .adapter
+                .create_session(CreateSessionInput {
+                    id: None,
+                    user_id: user_id.clone(),
+                    token: raw_token,
+                    expires_at,
+                    ip_address: meta.ip_address,
+                    user_agent: meta.user_agent,
+                })
+                .await?;
+            Some(session.token)
+        } else {
+            None
+        };
+
         Ok(VerifyEmailResponse {
             status: true,
             user: user.map(|u| u.to_wire()),
+            token: session_token,
         })
     }
 

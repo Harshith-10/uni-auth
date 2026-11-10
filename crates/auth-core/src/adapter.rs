@@ -39,6 +39,12 @@ pub trait AuthAdapter: Send + Sync {
         id: &str,
         verified: bool,
     ) -> BoxFuture<'static, Result<(), AdapterError>>;
+    fn update_user_profile(
+        &self,
+        id: &str,
+        name: Option<String>,
+        image: Option<String>,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>>;
     fn delete_user(&self, id: &str) -> BoxFuture<'static, Result<(), AdapterError>>;
 
     // ── Accounts ──
@@ -215,6 +221,31 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 user.email_verified = verified;
                 user.updated_at = OffsetDateTime::now_utc();
                 Ok(())
+            } else {
+                Err(AdapterError::NotFound)
+            }
+        })
+    }
+
+    fn update_user_profile(
+        &self,
+        id: &str,
+        name: Option<String>,
+        image: Option<String>,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        let store = Arc::clone(&self.store);
+        let id = id.to_string();
+        Box::pin(async move {
+            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            if let Some(user) = s.users.get_mut(&id) {
+                if let Some(n) = name {
+                    user.name = n;
+                }
+                if let Some(img) = image {
+                    user.image = if img.is_empty() { None } else { Some(img) };
+                }
+                user.updated_at = OffsetDateTime::now_utc();
+                Ok(user.clone())
             } else {
                 Err(AdapterError::NotFound)
             }

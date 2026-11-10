@@ -4,6 +4,7 @@ pub mod one_time_token;
 pub mod password;
 pub mod session;
 pub mod social;
+pub mod user;
 pub mod verification;
 
 use axum::extract::FromRef;
@@ -50,6 +51,9 @@ where
         )
         .route("/reset-password", post(password::reset_password))
         .route("/change-password", post(password::change_password))
+        // User Profile & Account Deletion
+        .route("/update-user", post(user::update_user))
+        .route("/delete-user", post(user::delete_user))
         // Email Verification
         .route(
             "/send-verification-email",
@@ -67,6 +71,7 @@ where
         )
         // Social OAuth & Accounts
         .route("/sign-in/social", post(social::sign_in_social))
+        .route("/link-social", post(social::link_social))
         .route("/callback/{provider}", get(social::oauth_callback))
         .route("/list-accounts", get(social::list_accounts))
         .route("/unlink-account", post(social::unlink_account))

@@ -99,7 +99,7 @@ pub struct SessionAndUserResponse {
     pub user: UserWire,
 }
 
-/// `POST /api/auth/sign-in/social` response.
+/// `POST /api/auth/sign-in/social` and `POST /api/auth/link-social` response.
 ///
 /// In standard OAuth flow, returns `{ redirect: true, url: "https://..." }`.
 /// When `disableRedirect: true`, returns `{ redirect: false, url: "https://..." }`.
@@ -142,7 +142,7 @@ impl Default for SignOutResponse {
 }
 
 // ──────────────────────────────────────────────
-// Password & Token Responses
+// Password, User & Token Responses
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/change-password` response.
@@ -155,6 +155,15 @@ pub struct ChangePasswordResponse {
 
     /// Updated user profile
     pub user: UserWire,
+}
+
+/// `POST /api/auth/update-user` response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateUserResponse {
+    pub status: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<UserWire>,
 }
 
 /// `GET /api/auth/one-time-token/generate` response.
@@ -190,4 +199,6 @@ pub struct VerifyEmailResponse {
     pub status: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<UserWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
