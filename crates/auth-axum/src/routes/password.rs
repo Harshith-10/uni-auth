@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use serde::Deserialize;
@@ -7,6 +7,7 @@ use serde::Deserialize;
 use auth_proto::{
     AuthErrorResponse, ChangePasswordRequest, RequestPasswordResetRequest, ResetPasswordRequest,
 };
+use crate::cookies::build_session_cookie;
 use crate::extract::CurrentSession;
 use crate::state::AuthState;
 
@@ -76,7 +77,26 @@ pub async fn change_password(
         )
         .await
     {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Ok(res) => {
+            let mut response = (StatusCode::OK, Json(res.clone())).into_response();
+            if let Some(ref raw_token) = res.token {
+                let signed_token = state.service.sign_token(raw_token);
+                let cookie = build_session_cookie(
+                    &state.cookie_name,
+                    &signed_token,
+                    state.service.config().session_expires_in.whole_seconds(),
+                    state.secure_cookies,
+                    &state.same_site,
+                );
+                if let Ok(cookie_val) = cookie.parse() {
+                    response.headers_mut().append(header::SET_COOKIE, cookie_val);
+                }
+                if let Ok(token_val) = signed_token.parse() {
+                    response.headers_mut().insert("set-auth-token", token_val);
+                }
+            }
+            response
+        }
         Err(err) => error_to_response(err),
     }
 }

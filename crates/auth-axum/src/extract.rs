@@ -11,9 +11,38 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
+use auth_core::RequestMeta;
 use auth_proto::{AuthErrorResponse, SessionWire, UserWire};
 use crate::cookies::extract_cookie_token;
 use crate::state::AuthState;
+
+/// Extracts client IP address (`x-forwarded-for` / `x-real-ip`) and `user-agent` from HTTP headers.
+pub fn extract_request_meta(headers: &HeaderMap) -> RequestMeta {
+    let ip_address = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    RequestMeta {
+        ip_address,
+        user_agent,
+    }
+}
 
 /// Extracts an authentication token from either `Authorization: Bearer <token>` or cookies.
 pub fn extract_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
@@ -78,6 +107,12 @@ where
             }
         };
 
+        // Cookies must carry a valid HMAC signature
+        if !is_bearer && auth_state.service.verify_signed_token(&token).is_none() {
+            let err = AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
+            return Err((StatusCode::UNAUTHORIZED, Json(err)).into_response());
+        }
+
         match auth_state.service.get_session(&token).await {
             Ok(Some(session_and_user)) => Ok(CurrentSession {
                 session: session_and_user.session,
@@ -127,6 +162,10 @@ where
             Some(t) => t,
             None => return Ok(OptionalSession(None)),
         };
+
+        if !is_bearer && auth_state.service.verify_signed_token(&token).is_none() {
+            return Ok(OptionalSession(None));
+        }
 
         match auth_state.service.get_session(&token).await {
             Ok(Some(session_and_user)) => Ok(OptionalSession(Some(CurrentSession {

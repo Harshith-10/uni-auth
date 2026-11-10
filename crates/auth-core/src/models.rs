@@ -4,6 +4,13 @@ use auth_proto::{AccountWire, SessionWire, UserWire};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+/// Optional HTTP request metadata (client IP address and User-Agent) captured when creating a session.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestMeta {
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+}
+
 /// Internal user database entity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UserRecord {

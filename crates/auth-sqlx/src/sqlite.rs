@@ -188,7 +188,8 @@ impl SqliteAuthAdapter {
     /// Creates an in-memory SQLite database and applies embedded Better Auth schema.
     pub async fn new_in_memory() -> Result<Self, sqlx::Error> {
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")?
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new()
             .max_connections(1) // In-memory DB requires 1 connection or shared cache
@@ -202,6 +203,9 @@ impl SqliteAuthAdapter {
 
     /// Executes the embedded Better Auth schema migration.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
+        sqlx::query("PRAGMA foreign_keys = ON;")
+            .execute(&self.pool)
+            .await?;
         sqlx::raw_sql(SQLITE_SCHEMA).execute(&self.pool).await?;
         Ok(())
     }
@@ -325,6 +329,16 @@ impl AuthAdapter for SqliteAuthAdapter {
         let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
+            sqlx::query(r#"DELETE FROM "account" WHERE user_id = ?"#)
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
+            sqlx::query(r#"DELETE FROM "session" WHERE user_id = ?"#)
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
             sqlx::query(r#"DELETE FROM "user" WHERE id = ?"#)
                 .bind(id)
                 .execute(&pool)

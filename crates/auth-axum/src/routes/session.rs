@@ -18,6 +18,12 @@ pub async fn get_session(
     State(state): State<AuthState>,
     headers: HeaderMap,
 ) -> Response {
+    let is_bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase().starts_with("bearer "))
+        .unwrap_or(false);
+
     let token = match extract_token_from_headers(&headers, &state.cookie_name) {
         Some(t) => t,
         None => {
@@ -25,6 +31,19 @@ pub async fn get_session(
             return (StatusCode::OK, Json(serde_json::Value::Null)).into_response();
         }
     };
+
+    if !is_bearer && state.service.verify_signed_token(&token).is_none() {
+        let mut response = (StatusCode::OK, Json(serde_json::Value::Null)).into_response();
+        let clear_cookie = build_clear_session_cookie(
+            &state.cookie_name,
+            state.secure_cookies,
+            &state.same_site,
+        );
+        if let Ok(cookie_val) = clear_cookie.parse() {
+            response.headers_mut().append(header::SET_COOKIE, cookie_val);
+        }
+        return response;
+    }
 
     match state.service.get_session(&token).await {
         Ok(Some(session)) => {

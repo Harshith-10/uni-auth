@@ -75,15 +75,18 @@ impl BetterAuthNativeClient {
     }
 
     /// Captures the `set-auth-token` response header and saves it to storage.
-    fn handle_auth_token_header(&self, headers: &HeaderMap) {
+    /// Returns `true` if a non-empty `set-auth-token` header was found and saved.
+    fn handle_auth_token_header(&self, headers: &HeaderMap) -> bool {
         if let Some(token_header) = headers.get("set-auth-token") {
             if let Ok(token_str) = token_header.to_str() {
                 let token = decode_if_percent_encoded(token_str.trim());
                 if !token.is_empty() {
                     let _ = self.storage.set_token(&token);
+                    return true;
                 }
             }
         }
+        false
     }
 
     /// Prepares request headers with `Authorization: Bearer <token>` if a token is present in storage.
@@ -130,7 +133,7 @@ impl BetterAuthNativeClient {
             .send()
             .await?;
 
-        self.handle_auth_token_header(res.headers());
+        let captured_header = self.handle_auth_token_header(res.headers());
 
         let status = res.status().as_u16();
         if status >= 400 {
@@ -145,8 +148,10 @@ impl BetterAuthNativeClient {
         }
 
         let body: SignUpResponse = res.json().await?;
-        if let Some(ref token) = body.token {
-            let _ = self.storage.set_token(token);
+        if !captured_header {
+            if let Some(ref token) = body.token {
+                let _ = self.storage.set_token(token);
+            }
         }
 
         Ok(body)
@@ -174,7 +179,7 @@ impl BetterAuthNativeClient {
             .send()
             .await?;
 
-        self.handle_auth_token_header(res.headers());
+        let captured_header = self.handle_auth_token_header(res.headers());
 
         let status = res.status().as_u16();
         if status >= 400 {
@@ -189,7 +194,9 @@ impl BetterAuthNativeClient {
         }
 
         let body: SignInResponse = res.json().await?;
-        let _ = self.storage.set_token(&body.token);
+        if !captured_header {
+            let _ = self.storage.set_token(&body.token);
+        }
 
         Ok(body)
     }
@@ -345,7 +352,7 @@ impl BetterAuthNativeClient {
             .send()
             .await?;
 
-        self.handle_auth_token_header(res.headers());
+        let captured_header = self.handle_auth_token_header(res.headers());
 
         let status = res.status().as_u16();
         if status >= 400 {
@@ -364,7 +371,7 @@ impl BetterAuthNativeClient {
 
         // If set-auth-token header was present, it was saved above.
         // Otherwise, save session token directly:
-        if self.storage.get_token()?.is_none() {
+        if !captured_header && self.storage.get_token()?.is_none() {
             let _ = self.storage.set_token(&body.session.token);
         }
 

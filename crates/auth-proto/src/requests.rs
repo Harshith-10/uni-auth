@@ -238,9 +238,16 @@ pub struct OneTimeTokenVerifyRequest {
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/unlink-account`
+///
+/// Reference: `.reference/better-auth/.../account.ts` lines 468-524
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnlinkAccountRequest {
     /// The provider ID to unlink (e.g., "google", "github")
+    #[serde(default)]
     pub provider_id: String,
+
+    /// Optional Better Auth account ID or provider account ID to unlink
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }

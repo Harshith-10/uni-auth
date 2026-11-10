@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use serde::Deserialize;
@@ -13,7 +13,7 @@ use auth_proto::{
     UnlinkAccountRequest,
 };
 use crate::cookies::build_session_cookie;
-use crate::extract::CurrentSession;
+use crate::extract::{extract_request_meta, CurrentSession};
 use crate::state::AuthState;
 
 fn error_to_response(err: auth_core::AuthError) -> Response {
@@ -47,6 +47,8 @@ pub async fn sign_in_social(
     let state_payload = serde_json::json!({
         "codeVerifier": code_verifier,
         "callbackURL": payload.callback_url,
+        "newUserCallbackURL": payload.new_user_callback_url,
+        "errorCallbackURL": payload.error_callback_url,
     })
     .to_string();
 
@@ -112,9 +114,11 @@ pub struct OAuthCallbackQuery {
 
 pub async fn oauth_callback(
     State(state): State<AuthState>,
+    headers: HeaderMap,
     Path(provider_name): Path<String>,
     Query(query): Query<OAuthCallbackQuery>,
 ) -> Response {
+    let meta = extract_request_meta(&headers);
     if let Some(ref err) = query.error {
         let desc = query.error_description.as_deref().unwrap_or(err);
         return (
@@ -175,8 +179,7 @@ pub async fn oauth_callback(
         }
     };
 
-    // In a live server, exchange code with token_url and fetch profile.
-    // For universal mock/test flexibility, we handle both live and simulated profiles:
+    // Simulated profile fallback (upgraded to live OAuth2 exchange in Stage 2)
     let account_id = format!("oauth_acc_{}", auth_core::crypto::generate_random_token(8));
     let email = format!("user_{}@example.com", auth_core::crypto::generate_random_token(6).to_lowercase());
     let name = format!("OAuth User ({provider_name})");
@@ -234,8 +237,8 @@ pub async fn oauth_callback(
             user_id: user.id.clone(),
             token: raw_token.clone(),
             expires_at,
-            ip_address: None,
-            user_agent: None,
+            ip_address: meta.ip_address,
+            user_agent: meta.user_agent,
         })
         .await
     {
@@ -282,7 +285,7 @@ pub async fn oauth_callback(
         let mut response = (
             StatusCode::OK,
             Json(serde_json::json!({
-                "token": signed_token,
+                "token": session.token,
                 "oneTimeToken": ott,
                 "user": user.to_wire()
             })),
@@ -321,10 +324,10 @@ pub async fn unlink_account(
     current_session: CurrentSession,
     Json(payload): Json<UnlinkAccountRequest>,
 ) -> Response {
-    // Better Auth unlink can take provider_id or accountId
+    let account_id = payload.account_id.as_deref().unwrap_or("");
     match state
         .service
-        .unlink_account(&current_session.user.id, &payload.provider_id, &current_session.user.id)
+        .unlink_account(&current_session.user.id, &payload.provider_id, account_id)
         .await
     {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),

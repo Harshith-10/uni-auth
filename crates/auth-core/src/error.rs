@@ -23,6 +23,18 @@ pub enum AuthError {
     #[error("Invalid password")]
     InvalidPassword,
 
+    #[error("Credential account not found")]
+    CredentialAccountNotFound,
+
+    #[error("Account not found")]
+    AccountNotFound,
+
+    #[error("You cannot unlink your last authentication method")]
+    FailedToUnlinkLastAccount,
+
+    #[error("Social account already linked")]
+    SocialAccountAlreadyLinked,
+
     #[error("User already exists. Use another email.")]
     UserAlreadyExists,
 
@@ -40,6 +52,12 @@ pub enum AuthError {
 
     #[error("Session not fresh")]
     SessionNotFresh,
+
+    #[error("Invalid origin")]
+    InvalidOrigin,
+
+    #[error("Invalid callback URL")]
+    InvalidCallbackUrl,
 
     #[error("Provider not found: {0}")]
     ProviderNotFound(String),
@@ -76,15 +94,22 @@ impl AuthError {
             Self::PasswordTooLong => error_codes::PASSWORD_TOO_LONG,
             Self::InvalidEmailOrPassword => error_codes::INVALID_EMAIL_OR_PASSWORD,
             Self::InvalidPassword => error_codes::INVALID_PASSWORD,
+            Self::CredentialAccountNotFound => error_codes::CREDENTIAL_ACCOUNT_NOT_FOUND,
+            Self::AccountNotFound => error_codes::ACCOUNT_NOT_FOUND,
+            Self::FailedToUnlinkLastAccount => error_codes::FAILED_TO_UNLINK_LAST_ACCOUNT,
+            Self::SocialAccountAlreadyLinked => error_codes::SOCIAL_ACCOUNT_ALREADY_LINKED,
             Self::UserAlreadyExists => error_codes::USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL,
             Self::EmailNotVerified => error_codes::EMAIL_NOT_VERIFIED,
             Self::InvalidToken => error_codes::INVALID_TOKEN,
             Self::TokenExpired => error_codes::TOKEN_EXPIRED,
             Self::SessionExpired => error_codes::SESSION_EXPIRED,
             Self::SessionNotFresh => error_codes::SESSION_NOT_FRESH,
+            Self::InvalidOrigin => error_codes::INVALID_ORIGIN,
+            Self::InvalidCallbackUrl => error_codes::INVALID_CALLBACK_URL,
             Self::ProviderNotFound(_) => error_codes::PROVIDER_NOT_FOUND,
             Self::EmailPasswordDisabled => error_codes::EMAIL_PASSWORD_DISABLED,
             Self::SignUpDisabled => error_codes::EMAIL_PASSWORD_SIGN_UP_DISABLED,
+            Self::RateLimitExceeded => "RATE_LIMITED",
             _ => "INTERNAL_SERVER_ERROR",
         }
     }
@@ -92,9 +117,22 @@ impl AuthError {
     /// Corresponding HTTP status code.
     pub fn http_status(&self) -> u16 {
         match self {
-            Self::InvalidEmail | Self::PasswordTooShort | Self::PasswordTooLong => 400,
-            Self::InvalidEmailOrPassword | Self::InvalidPassword | Self::InvalidToken => 401,
-            Self::EmailNotVerified | Self::SessionNotFresh => 403,
+            Self::InvalidEmail
+            | Self::PasswordTooShort
+            | Self::PasswordTooLong
+            | Self::CredentialAccountNotFound
+            | Self::AccountNotFound
+            | Self::FailedToUnlinkLastAccount
+            | Self::SocialAccountAlreadyLinked
+            | Self::InvalidCallbackUrl
+            | Self::EmailPasswordDisabled
+            | Self::SignUpDisabled => 400,
+            Self::InvalidEmailOrPassword
+            | Self::InvalidPassword
+            | Self::InvalidToken
+            | Self::TokenExpired
+            | Self::SessionExpired => 401,
+            Self::EmailNotVerified | Self::SessionNotFresh | Self::InvalidOrigin => 403,
             Self::UserNotFound | Self::ProviderNotFound(_) => 404,
             Self::UserAlreadyExists => 422,
             Self::RateLimitExceeded => 429,

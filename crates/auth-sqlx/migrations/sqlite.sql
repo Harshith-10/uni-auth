@@ -1,6 +1,8 @@
 -- Better Auth SQLite Migration
 -- Core Schema: user, session, account, verification
 
+PRAGMA foreign_keys = ON;
+
 CREATE TABLE IF NOT EXISTS "user" (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
@@ -11,7 +13,7 @@ CREATE TABLE IF NOT EXISTS "user" (
     updated_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_email ON "user"(email);
+CREATE INDEX IF NOT EXISTS idx_user_email ON "user"(LOWER(email));
 
 CREATE TABLE IF NOT EXISTS "session" (
     id TEXT PRIMARY KEY NOT NULL,

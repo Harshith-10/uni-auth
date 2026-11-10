@@ -27,7 +27,8 @@ pub trait TokenStorage: Send + Sync {
 /// OS Keyring storage backend using `keyring` crate with an in-memory write-through cache.
 ///
 /// UI render loops can read `get_token` instantly from the memory cache without blocking
-/// on OS IPC or DBus calls. Writes update the cache immediately and persist to the OS keychain.
+/// on OS IPC or DBus calls. Writes update the cache immediately and persist to the OS keychain
+/// on a background blocking thread when a Tokio runtime is active.
 #[derive(Clone)]
 pub struct KeyringTokenStorage {
     service_name: String,
@@ -86,19 +87,31 @@ impl TokenStorage for KeyringTokenStorage {
             *cache = Some(token.to_string());
         }
 
-        // 2. Persist to OS keyring
-        let entry = keyring::Entry::new(&self.service_name, &self.account_name)
-            .map_err(|e| StorageError::Keyring(e.to_string()))?;
+        // 2. Persist to OS keyring on background blocking pool if Tokio is running
+        let service = self.service_name.clone();
+        let account = self.account_name.clone();
+        let token_owned = token.to_string();
 
-        entry
-            .set_password(token)
-            .map_err(|e| StorageError::Keyring(e.to_string()))?;
-
-        Ok(())
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(move || {
+                if let Ok(entry) = keyring::Entry::new(&service, &account) {
+                    if let Err(e) = entry.set_password(&token_owned) {
+                        tracing::warn!("Failed to persist token to OS keyring: {e}");
+                    }
+                }
+            });
+            Ok(())
+        } else {
+            let entry = keyring::Entry::new(&service, &account)
+                .map_err(|e| StorageError::Keyring(e.to_string()))?;
+            entry
+                .set_password(&token_owned)
+                .map_err(|e| StorageError::Keyring(e.to_string()))
+        }
     }
 
     fn delete_token(&self) -> Result<(), StorageError> {
-        // 1. Clear memory cache
+        // 1. Clear memory cache immediately
         {
             let mut cache = self
                 .cache
@@ -107,13 +120,28 @@ impl TokenStorage for KeyringTokenStorage {
             *cache = None;
         }
 
-        // 2. Delete from OS keyring
-        let entry = keyring::Entry::new(&self.service_name, &self.account_name)
-            .map_err(|e| StorageError::Keyring(e.to_string()))?;
+        // 2. Delete from OS keyring on background blocking pool if Tokio is running
+        let service = self.service_name.clone();
+        let account = self.account_name.clone();
 
-        match entry.delete_credential() {
-            Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(StorageError::Keyring(e.to_string())),
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(move || {
+                if let Ok(entry) = keyring::Entry::new(&service, &account) {
+                    if let Err(e) = entry.delete_credential() {
+                        if !matches!(e, keyring::Error::NoEntry) {
+                            tracing::warn!("Failed to delete token from OS keyring: {e}");
+                        }
+                    }
+                }
+            });
+            Ok(())
+        } else {
+            let entry = keyring::Entry::new(&service, &account)
+                .map_err(|e| StorageError::Keyring(e.to_string()))?;
+            match entry.delete_credential() {
+                Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(e) => Err(StorageError::Keyring(e.to_string())),
+            }
         }
     }
 }

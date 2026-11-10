@@ -14,9 +14,9 @@ use auth_proto::{
 use crate::adapter::AuthAdapter;
 use crate::crypto;
 use crate::email::{EmailSender, NoopEmailSender};
-use crate::error::AuthError;
+use crate::error::{AdapterError, AuthError};
 use crate::models::{
-    CreateAccountInput, CreateSessionInput, CreateUserInput, CreateVerificationInput,
+    CreateAccountInput, CreateSessionInput, CreateUserInput, CreateVerificationInput, RequestMeta,
 };
 
 /// Configuration options for `AuthService`.
@@ -105,6 +105,11 @@ impl AuthService {
         crypto::sign_token(&self.config.secret, raw_token)
     }
 
+    /// Strictly verifies a signed `<token>.<signature>` token (required for cookies).
+    pub fn verify_signed_token(&self, signed_token: &str) -> Option<String> {
+        crypto::extract_and_verify_signed_token(&self.config.secret, signed_token)
+    }
+
     /// Verifies and extracts a raw token from a signed or raw token string.
     pub fn verify_token(&self, signed_or_raw: &str) -> Option<String> {
         crypto::extract_and_verify_token(&self.config.secret, signed_or_raw)
@@ -116,6 +121,16 @@ impl AuthService {
 
     /// Registers a new user with email and password.
     pub async fn sign_up_email(&self, req: SignUpEmailRequest) -> Result<SignUpResponse, AuthError> {
+        self.sign_up_email_with_meta(req, RequestMeta::default())
+            .await
+    }
+
+    /// Registers a new user with email, password, and HTTP request metadata (`ip_address`, `user_agent`).
+    pub async fn sign_up_email_with_meta(
+        &self,
+        req: SignUpEmailRequest,
+        meta: RequestMeta,
+    ) -> Result<SignUpResponse, AuthError> {
         let email = req.email.trim().to_lowercase();
         if !email.contains('@') || !email.contains('.') {
             return Err(AuthError::InvalidEmail);
@@ -199,8 +214,8 @@ impl AuthService {
             });
         }
 
-        // Auto sign-in if enabled
-        if self.config.auto_sign_in && req.remember_me != Some(false) {
+        // Auto sign-in if enabled (rememberMe: false still creates a session, omitting Max-Age on cookie)
+        if self.config.auto_sign_in {
             let raw_token = crypto::generate_session_token();
             let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
 
@@ -209,16 +224,15 @@ impl AuthService {
                 .create_session(CreateSessionInput {
                     id: None,
                     user_id: user.id.clone(),
-                    token: raw_token.clone(),
+                    token: raw_token,
                     expires_at,
-                    ip_address: None,
-                    user_agent: None,
+                    ip_address: meta.ip_address,
+                    user_agent: meta.user_agent,
                 })
                 .await?;
 
-            let signed_token = self.sign_token(&session.token);
             Ok(SignUpResponse {
-                token: Some(signed_token),
+                token: Some(session.token),
                 user: user.to_wire(),
             })
         } else {
@@ -231,7 +245,24 @@ impl AuthService {
 
     /// Authenticates a user with email and password, issuing a new session.
     pub async fn sign_in_email(&self, req: SignInEmailRequest) -> Result<SignInResponse, AuthError> {
+        self.sign_in_email_with_meta(req, RequestMeta::default())
+            .await
+    }
+
+    /// Authenticates a user with email, password, and HTTP request metadata (`ip_address`, `user_agent`).
+    pub async fn sign_in_email_with_meta(
+        &self,
+        req: SignInEmailRequest,
+        meta: RequestMeta,
+    ) -> Result<SignInResponse, AuthError> {
         let email = req.email.trim().to_lowercase();
+        if !email.contains('@') || !email.contains('.') {
+            return Err(AuthError::InvalidEmail);
+        }
+        if req.password.len() > self.config.max_password_length {
+            return Err(AuthError::PasswordTooLong);
+        }
+
         let user = self.adapter.find_user_by_email(&email).await?;
 
         let user = match user {
@@ -283,18 +314,16 @@ impl AuthService {
             .create_session(CreateSessionInput {
                 id: None,
                 user_id: user.id.clone(),
-                token: raw_token.clone(),
+                token: raw_token,
                 expires_at,
-                ip_address: None,
-                user_agent: None,
+                ip_address: meta.ip_address,
+                user_agent: meta.user_agent,
             })
             .await?;
 
-        let signed_token = self.sign_token(&session.token);
-
         Ok(SignInResponse {
             redirect: req.callback_url.is_some(),
-            token: signed_token,
+            token: session.token,
             url: req.callback_url,
             user: user.to_wire(),
         })
@@ -450,6 +479,13 @@ impl AuthService {
                 .email_sender
                 .send_password_reset_email(&email, &reset_url, &token)
                 .await;
+        } else {
+            // Mitigate timing attacks when email does not exist
+            let _ = crypto::generate_random_token(24);
+            let _ = self
+                .adapter
+                .find_verification("reset-password:dummy-verification-token")
+                .await;
         }
 
         Ok(StatusMessageResponse {
@@ -471,21 +507,59 @@ impl AuthService {
         }
 
         let identifier = format!("reset-password:{token}");
-        let record = self
+        // Look up the verification record without burning it until password hashing succeeds
+        let preview = self
             .adapter
-            .consume_verification(&identifier)
+            .find_verification(&identifier)
             .await?
             .ok_or(AuthError::InvalidToken)?;
 
-        let user_id = record.value;
+        if preview.is_expired() {
+            let _ = self.adapter.delete_verification(&identifier).await;
+            return Err(AuthError::InvalidToken);
+        }
+
+        let user_id = preview.value;
+        if self.adapter.find_user_by_id(&user_id).await?.is_none() {
+            return Err(AuthError::UserNotFound);
+        }
 
         let password_hash = crypto::hash_password(req.new_password)
             .await
             .map_err(AuthError::Crypto)?;
 
+        // Atomically consume the single-use verification token
         self.adapter
+            .consume_verification(&identifier)
+            .await?
+            .ok_or(AuthError::InvalidToken)?;
+
+        match self
+            .adapter
             .update_account_password(&user_id, &password_hash)
-            .await?;
+            .await
+        {
+            Ok(()) => {}
+            Err(AdapterError::NotFound) => {
+                // Support setting a credential password for users who registered via OAuth
+                self.adapter
+                    .create_account(CreateAccountInput {
+                        id: None,
+                        user_id: user_id.clone(),
+                        account_id: user_id.clone(),
+                        provider_id: "credential".to_string(),
+                        password: Some(password_hash),
+                        access_token: None,
+                        refresh_token: None,
+                        id_token: None,
+                        access_token_expires_at: None,
+                        refresh_token_expires_at: None,
+                        scope: None,
+                    })
+                    .await?;
+            }
+            Err(e) => return Err(AuthError::Adapter(e)),
+        }
 
         // Security requirement: password reset must revoke all existing sessions
         self.adapter.delete_sessions_by_user_id(&user_id).await?;
@@ -500,13 +574,25 @@ impl AuthService {
         current_token_or_signed: &str,
         req: ChangePasswordRequest,
     ) -> Result<ChangePasswordResponse, AuthError> {
+        if req.new_password.len() < self.config.min_password_length {
+            return Err(AuthError::PasswordTooShort);
+        }
+        if req.new_password.len() > self.config.max_password_length {
+            return Err(AuthError::PasswordTooLong);
+        }
+        if req.current_password.len() > self.config.max_password_length {
+            return Err(AuthError::PasswordTooLong);
+        }
+
         let account = self
             .adapter
             .find_account("credential", user_id)
             .await?
-            .ok_or(AuthError::UserNotFound)?;
+            .ok_or(AuthError::CredentialAccountNotFound)?;
 
-        let stored_hash = account.password.ok_or(AuthError::InvalidPassword)?;
+        let stored_hash = account
+            .password
+            .ok_or(AuthError::CredentialAccountNotFound)?;
 
         let is_valid = crypto::verify_password(stored_hash, req.current_password)
             .await
@@ -514,13 +600,6 @@ impl AuthService {
 
         if !is_valid {
             return Err(AuthError::InvalidPassword);
-        }
-
-        if req.new_password.len() < self.config.min_password_length {
-            return Err(AuthError::PasswordTooShort);
-        }
-        if req.new_password.len() > self.config.max_password_length {
-            return Err(AuthError::PasswordTooLong);
         }
 
         let new_hash = crypto::hash_password(req.new_password)
@@ -538,11 +617,35 @@ impl AuthService {
             .ok_or(AuthError::UserNotFound)?;
 
         let token = if req.revoke_other_sessions == Some(true) {
-            let raw_token = self
+            let current_raw = self
                 .verify_token(current_token_or_signed)
                 .unwrap_or_else(|| current_token_or_signed.to_string());
-            self.adapter.delete_other_sessions(user_id, &raw_token).await?;
-            Some(self.sign_token(&raw_token))
+            let current_meta = self
+                .adapter
+                .find_session_by_token(&current_raw)
+                .await?
+                .map(|s| RequestMeta {
+                    ip_address: s.ip_address,
+                    user_agent: s.user_agent,
+                })
+                .unwrap_or_default();
+
+            // Rotate session and revoke all existing sessions per Better Auth update-user.ts
+            self.adapter.delete_sessions_by_user_id(user_id).await?;
+            let fresh_raw_token = crypto::generate_session_token();
+            let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
+            let new_session = self
+                .adapter
+                .create_session(CreateSessionInput {
+                    id: None,
+                    user_id: user_id.to_string(),
+                    token: fresh_raw_token,
+                    expires_at,
+                    ip_address: current_meta.ip_address,
+                    user_agent: current_meta.user_agent,
+                })
+                .await?;
+            Some(new_session.token)
         } else {
             None
         };
@@ -702,7 +805,12 @@ impl AuthService {
             .map(|a| {
                 let scopes = a
                     .scope
-                    .map(|s| s.split(',').map(|p| p.trim().to_string()).collect())
+                    .map(|s| {
+                        s.split(',')
+                            .map(|p| p.trim().to_string())
+                            .filter(|p| !p.is_empty())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 AccountListEntryWire {
                     id: a.id,
@@ -717,7 +825,8 @@ impl AuthService {
             .collect())
     }
 
-    /// Unlinks an account. Prevents unlinking if it's the last remaining account.
+    /// Unlinks an account by `provider_id` and/or `account_id`.
+    /// Prevents unlinking if it is the user's last remaining authentication method.
     pub async fn unlink_account(
         &self,
         user_id: &str,
@@ -726,12 +835,31 @@ impl AuthService {
     ) -> Result<StatusResponse, AuthError> {
         let accounts = self.adapter.find_accounts_by_user_id(user_id).await?;
         if accounts.len() <= 1 {
-            return Err(AuthError::Internal(
-                "You cannot unlink your last authentication method".to_string(),
-            ));
+            return Err(AuthError::FailedToUnlinkLastAccount);
         }
 
-        self.adapter.delete_account(provider_id, account_id).await?;
+        let target = accounts
+            .iter()
+            .find(|a| {
+                let provider_matches =
+                    provider_id.is_empty() || a.provider_id == provider_id;
+                let account_matches = account_id.is_empty()
+                    || a.account_id == account_id
+                    || a.id == account_id;
+                provider_matches && account_matches
+            })
+            .or_else(|| {
+                if !provider_id.is_empty() {
+                    accounts.iter().find(|a| a.provider_id == provider_id)
+                } else {
+                    None
+                }
+            })
+            .ok_or(AuthError::AccountNotFound)?;
+
+        self.adapter
+            .delete_account(&target.provider_id, &target.account_id)
+            .await?;
         Ok(StatusResponse::success())
     }
 }

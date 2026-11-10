@@ -102,22 +102,44 @@ pub fn verify_signature(secret: &[u8], token: &str, signature: &str) -> bool {
         .into()
 }
 
-/// Extracts and verifies the raw token from a potentially signed token string.
+/// Strictly verifies a signed `<token>.<signature>` string, rejecting any unsigned input.
 ///
-/// If `signed_or_raw` contains a `.`, it is verified as `<token>.<signature>`.
-/// If valid, `Some(raw_token)` is returned.
-/// If invalid signature, `None` is returned.
-/// If `signed_or_raw` contains no `.`, it is returned as `Some(raw_token)` directly.
-pub fn extract_and_verify_token(secret: &[u8], signed_or_raw: &str) -> Option<String> {
-    if let Some((token, signature)) = signed_or_raw.split_once('.') {
-        if verify_signature(secret, token, signature) {
-            Some(token.to_string())
-        } else {
-            None
-        }
+/// Used for verifying `better-auth.session_token` cookies and strict Bearer tokens.
+pub fn extract_and_verify_signed_token(secret: &[u8], signed_token: &str) -> Option<String> {
+    let (token, signature) = signed_token.split_once('.')?;
+    if token.is_empty() || signature.is_empty() {
+        return None;
+    }
+    if verify_signature(secret, token, signature) {
+        Some(token.to_string())
+    } else {
+        None
+    }
+}
+
+/// Extracts and verifies the raw token from a signed or raw token string.
+///
+/// - If `signed_or_raw` contains a `.`, it is verified as `<token>.<signature>`.
+/// - If `require_signature` is `true`, unsigned tokens (without `.`) are rejected (`None`).
+/// - If `require_signature` is `false` (default Better Auth Bearer plugin behavior),
+///   an unsigned token is returned as `Some(raw_token)` for database lookup.
+pub fn extract_and_verify_token_with_policy(
+    secret: &[u8],
+    signed_or_raw: &str,
+    require_signature: bool,
+) -> Option<String> {
+    if signed_or_raw.contains('.') {
+        extract_and_verify_signed_token(secret, signed_or_raw)
+    } else if require_signature || signed_or_raw.is_empty() {
+        None
     } else {
         Some(signed_or_raw.to_string())
     }
+}
+
+/// Extracts and verifies the raw token from a potentially signed token string.
+pub fn extract_and_verify_token(secret: &[u8], signed_or_raw: &str) -> Option<String> {
+    extract_and_verify_token_with_policy(secret, signed_or_raw, false)
 }
 
 #[cfg(test)]
@@ -147,12 +169,24 @@ mod tests {
 
         let verified = extract_and_verify_token(secret, &signed);
         assert_eq!(verified.as_deref(), Some(token.as_str()));
+        assert_eq!(
+            extract_and_verify_signed_token(secret, &signed).as_deref(),
+            Some(token.as_str())
+        );
 
         // Tampered token fails
         let tampered = format!("tampered_{signed}");
         assert_eq!(extract_and_verify_token(secret, &tampered), None);
+        assert_eq!(extract_and_verify_signed_token(secret, &tampered), None);
 
-        // Unsigned raw token passes through
+        // Unsigned raw token rejected by strict signed verifier
+        assert_eq!(extract_and_verify_signed_token(secret, &token), None);
+        assert_eq!(
+            extract_and_verify_token_with_policy(secret, &token, true),
+            None
+        );
+
+        // Unsigned raw token passes through when require_signature is false
         assert_eq!(
             extract_and_verify_token(secret, &token),
             Some(token.clone())

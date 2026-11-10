@@ -2,7 +2,7 @@
 
 use axum::http::HeaderMap;
 
-/// Constructs a `Set-Cookie` header value to establish a session.
+/// Constructs a `Set-Cookie` header value to establish a persistent session.
 pub fn build_session_cookie(
     name: &str,
     token: &str,
@@ -10,10 +10,27 @@ pub fn build_session_cookie(
     secure: bool,
     same_site: &str,
 ) -> String {
+    build_session_cookie_with_options(name, token, Some(max_age_secs), secure, same_site)
+}
+
+/// Constructs a `Set-Cookie` header value with optional `Max-Age`.
+///
+/// When `max_age_secs` is `None` (e.g., `rememberMe == false`), `Max-Age` is omitted so the
+/// browser treats the cookie as a session-only cookie.
+pub fn build_session_cookie_with_options(
+    name: &str,
+    token: &str,
+    max_age_secs: Option<i64>,
+    secure: bool,
+    same_site: &str,
+) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
-    format!(
-        "{name}={token}; Path=/; HttpOnly; SameSite={same_site}; Max-Age={max_age_secs}{secure_flag}"
-    )
+    match max_age_secs {
+        Some(max_age) => format!(
+            "{name}={token}; Path=/; HttpOnly; SameSite={same_site}; Max-Age={max_age}{secure_flag}"
+        ),
+        None => format!("{name}={token}; Path=/; HttpOnly; SameSite={same_site}{secure_flag}"),
+    }
 }
 
 /// Constructs a `Set-Cookie` header value to clear the session.
