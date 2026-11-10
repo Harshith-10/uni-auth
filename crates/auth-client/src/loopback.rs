@@ -3,11 +3,14 @@
 //! Spawns an ephemeral HTTP listener on `127.0.0.1:0` to capture browser redirect tokens
 //! without requiring custom URL schemes on the host operating system.
 
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::client::{BetterAuthNativeClient, ClientError};
+
+const DEFAULT_LOOPBACK_TIMEOUT: Duration = Duration::from_secs(120);
 
 const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
@@ -45,10 +48,19 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
-/// Spawns an ephemeral TCP listener on `127.0.0.1:0` and awaits a single OAuth callback.
+/// Spawns an ephemeral TCP listener on `127.0.0.1:0` and awaits a single OAuth callback
+/// with the default 120-second timeout.
 ///
 /// Returns `(port, receiver_channel)`.
 pub async fn start_loopback_listener() -> Result<(u16, oneshot::Receiver<Result<String, String>>), std::io::Error> {
+    start_loopback_listener_with_timeout(DEFAULT_LOOPBACK_TIMEOUT).await
+}
+
+/// Spawns an ephemeral TCP listener on `127.0.0.1:0` and awaits a single OAuth callback
+/// bounded by `timeout` so abandoned browser tabs do not leave dangling listeners.
+pub async fn start_loopback_listener_with_timeout(
+    timeout: Duration,
+) -> Result<(u16, oneshot::Receiver<Result<String, String>>), std::io::Error> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
 
@@ -56,51 +68,63 @@ pub async fn start_loopback_listener() -> Result<(u16, oneshot::Receiver<Result<
 
     tokio::spawn(async move {
         let mut tx = Some(tx);
-        // Accept only the first matching callback connection
-        if let Ok((mut stream, _)) = listener.accept().await {
-            let mut buf = [0u8; 4096];
-            if let Ok(n) = stream.read(&mut buf).await {
-                let req_text = String::from_utf8_lossy(&buf[..n]);
+        match tokio::time::timeout(timeout, listener.accept()).await {
+            Ok(Ok((mut stream, _))) => {
+                let mut buf = [0u8; 4096];
+                if let Ok(Ok(n)) =
+                    tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buf)).await
+                {
+                    let req_text = String::from_utf8_lossy(&buf[..n]);
 
-                // Extract query parameters from GET /auth/callback?token=... HTTP/1.1
-                if let Some(first_line) = req_text.lines().next() {
-                    let parts: Vec<&str> = first_line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        let path_and_query = parts[1];
-                        if let Some((_, query)) = path_and_query.split_once('?') {
-                            let mut token_found = None;
-                            let mut error_found = None;
+                    // Extract query parameters from GET /auth/callback?token=... HTTP/1.1
+                    if let Some(first_line) = req_text.lines().next() {
+                        let parts: Vec<&str> = first_line.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            let path_and_query = parts[1];
+                            if let Some((_, query)) = path_and_query.split_once('?') {
+                                let mut token_found = None;
+                                let mut error_found = None;
 
-                            for param in query.split('&') {
-                                if let Some((k, v)) = param.split_once('=') {
-                                    if k == "token" {
-                                        token_found = Some(v.to_string());
-                                    } else if k == "error" {
-                                        error_found = Some(v.to_string());
+                                for param in query.split('&') {
+                                    if let Some((k, v)) = param.split_once('=') {
+                                        if k == "token" {
+                                            token_found = Some(v.to_string());
+                                        } else if k == "error" {
+                                            error_found = Some(v.to_string());
+                                        }
                                     }
                                 }
-                            }
 
-                            // Write response HTML
-                            let response = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                SUCCESS_HTML.len(),
-                                SUCCESS_HTML
-                            );
-                            let _ = stream.write_all(response.as_bytes()).await;
-                            let _ = stream.flush().await;
+                                let response = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    SUCCESS_HTML.len(),
+                                    SUCCESS_HTML
+                                );
+                                let _ = stream.write_all(response.as_bytes()).await;
+                                let _ = stream.flush().await;
 
-                            if let Some(sender) = tx.take() {
-                                if let Some(token) = token_found {
-                                    let _ = sender.send(Ok(token));
-                                } else if let Some(err) = error_found {
-                                    let _ = sender.send(Err(err));
-                                } else {
-                                    let _ = sender.send(Err("No token found in callback".to_string()));
+                                if let Some(sender) = tx.take() {
+                                    if let Some(token) = token_found {
+                                        let _ = sender.send(Ok(token));
+                                    } else if let Some(err) = error_found {
+                                        let _ = sender.send(Err(err));
+                                    } else {
+                                        let _ = sender.send(Err("No token found in callback".to_string()));
+                                    }
                                 }
                             }
                         }
                     }
+                }
+            }
+            Ok(Err(e)) => {
+                if let Some(sender) = tx.take() {
+                    let _ = sender.send(Err(format!("Loopback listener accept error: {e}")));
+                }
+            }
+            Err(_) => {
+                if let Some(sender) = tx.take() {
+                    let _ = sender.send(Err("Loopback OAuth listener timed out".to_string()));
                 }
             }
         }

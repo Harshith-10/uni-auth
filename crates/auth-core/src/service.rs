@@ -1,4 +1,4 @@
-//! Core authentication service coordinating business logic, crypto, hooks, and persistence.
+//! Core authentication service coordinating business logic, crypto, hooks, plugins, and persistence.
 
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
@@ -20,6 +20,7 @@ use crate::hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter};
 use crate::models::{
     CreateAccountInput, CreateSessionInput, CreateUserInput, CreateVerificationInput, RequestMeta,
 };
+use crate::plugin::AuthPlugin;
 
 /// Configuration options for `AuthService`.
 #[derive(Clone, Debug)]
@@ -80,6 +81,7 @@ pub struct AuthService {
     email_sender: Arc<dyn EmailSender>,
     hooks: Arc<dyn AuthHooks>,
     rate_limiter: Option<Arc<SlidingWindowRateLimiter>>,
+    plugins: Arc<Vec<Arc<dyn AuthPlugin>>>,
     auto_sign_in_after_verification: bool,
     session_update_age: Duration,
     session_fresh_age: Duration,
@@ -93,6 +95,7 @@ impl AuthService {
             email_sender: Arc::new(NoopEmailSender),
             hooks: Arc::new(NoopAuthHooks),
             rate_limiter: None,
+            plugins: Arc::new(Vec::new()),
             auto_sign_in_after_verification: false,
             session_update_age: Duration::hours(24),
             session_fresh_age: Duration::hours(24),
@@ -112,6 +115,18 @@ impl AuthService {
     pub fn with_rate_limiter(mut self, limiter: Arc<SlidingWindowRateLimiter>) -> Self {
         self.rate_limiter = Some(limiter);
         self
+    }
+
+    /// Registers a modular `AuthPlugin` with `AuthService`.
+    pub fn with_plugin(mut self, plugin: Arc<dyn AuthPlugin>) -> Self {
+        let mut list = (*self.plugins).clone();
+        list.push(plugin);
+        self.plugins = Arc::new(list);
+        self
+    }
+
+    pub fn plugins(&self) -> &[Arc<dyn AuthPlugin>] {
+        &self.plugins
     }
 
     /// Configures whether verifying an email address automatically issues a session token.
@@ -214,17 +229,14 @@ impl AuthService {
             return Err(AuthError::PasswordTooLong);
         }
 
-        // Check duplicate email
         if self.adapter.find_user_by_email(&email).await?.is_some() {
             return Err(AuthError::UserAlreadyExists);
         }
 
-        // Hash password non-blocking
         let password_hash = crypto::hash_password(req.password)
             .await
             .map_err(AuthError::Crypto)?;
 
-        // Create user
         let user = self
             .adapter
             .create_user(CreateUserInput {
@@ -239,7 +251,6 @@ impl AuthService {
         let user_wire = user.to_wire();
         self.hooks.on_user_created(&user_wire).await;
 
-        // Link credential account
         self.adapter
             .create_account(CreateAccountInput {
                 id: None,
@@ -256,7 +267,6 @@ impl AuthService {
             })
             .await?;
 
-        // Send verification email if required
         if self.config.require_email_verification {
             let token = crypto::generate_random_token(32);
             let expires_at = OffsetDateTime::now_utc() + self.config.verify_email_expires_in;
@@ -288,7 +298,6 @@ impl AuthService {
             });
         }
 
-        // Auto sign-in if enabled
         if self.config.auto_sign_in {
             let raw_token = crypto::generate_session_token();
             let expires_at = OffsetDateTime::now_utc() + self.config.session_expires_in;
@@ -307,6 +316,9 @@ impl AuthService {
 
             let session_wire = session.to_wire();
             self.hooks.on_session_created(&session_wire, &user_wire).await;
+            for plugin in self.plugins.iter() {
+                plugin.on_after_session_issued(&session_wire, &user_wire).await?;
+            }
 
             Ok(SignUpResponse {
                 token: Some(session.token),
@@ -377,6 +389,8 @@ impl AuthService {
             }
         };
 
+        let was_legacy_scrypt = crypto::is_legacy_scrypt_hash(&stored_hash);
+        let password_clone = req.password.clone();
         let is_valid = crypto::verify_password(stored_hash, req.password)
             .await
             .map_err(AuthError::Crypto)?;
@@ -385,8 +399,23 @@ impl AuthService {
             return Err(AuthError::InvalidEmailOrPassword);
         }
 
+        // Transparently upgrade legacy Better Auth scrypt password hashes to Argon2id
+        if was_legacy_scrypt {
+            if let Ok(upgraded_hash) = crypto::hash_password(password_clone).await {
+                let _ = self
+                    .adapter
+                    .update_account_password(&user.id, &upgraded_hash)
+                    .await;
+            }
+        }
+
         if self.config.require_email_verification && !user.email_verified {
             return Err(AuthError::EmailNotVerified);
+        }
+
+        let user_wire = user.to_wire();
+        for plugin in self.plugins.iter() {
+            plugin.on_before_sign_in(&user_wire).await?;
         }
 
         let raw_token = crypto::generate_session_token();
@@ -404,9 +433,11 @@ impl AuthService {
             })
             .await?;
 
-        let user_wire = user.to_wire();
         let session_wire = session.to_wire();
         self.hooks.on_session_created(&session_wire, &user_wire).await;
+        for plugin in self.plugins.iter() {
+            plugin.on_after_session_issued(&session_wire, &user_wire).await?;
+        }
 
         Ok(SignInResponse {
             redirect: req.callback_url.is_some(),
@@ -441,7 +472,6 @@ impl AuthService {
             return Ok(None);
         }
 
-        // Sliding window session refresh when updateAge has elapsed
         let now = OffsetDateTime::now_utc();
         if self.session_update_age > Duration::ZERO
             && (now - session.updated_at) >= self.session_update_age

@@ -13,6 +13,6 @@ pub mod storage;
 pub mod store;
 
 pub use client::{BetterAuthNativeClient, ClientError};
-pub use loopback::start_loopback_listener;
+pub use loopback::{start_loopback_listener, start_loopback_listener_with_timeout};
 pub use storage::{KeyringTokenStorage, MockTokenStorage, StorageError, TokenStorage};
 pub use store::{AuthStatus, AuthStore};

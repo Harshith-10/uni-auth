@@ -1,6 +1,8 @@
 //! Cryptographic primitives for Better Auth wire and storage compatibility.
 //!
 //! - Non-blocking Argon2id password hashing and verification inside `tokio::task::spawn_blocking`.
+//! - Legacy Better Auth `scrypt` (`<salt>:<hex_key>`, N=16384, r=16, p=1, dkLen=64) verification
+//!   for zero-downtime migration from TypeScript Better Auth databases.
 //! - HKDF-SHA256 key derivation from `BETTER_AUTH_SECRET`/`UNI_AUTH_SECRET`.
 //! - HMAC-SHA256 token and cookie signing matching Better Auth format (`token.signature`).
 //! - Constant-time signature verification (`subtle::ConstantTimeEq`).
@@ -19,6 +21,11 @@ use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Returns `true` if the stored password hash uses Better Auth's `<salt>:<hex_key>` scrypt format.
+pub fn is_legacy_scrypt_hash(hash: &str) -> bool {
+    !hash.starts_with("$argon2") && hash.contains(':')
+}
+
 /// Hashes a password asynchronously using Argon2id without blocking Tokio worker threads.
 pub async fn hash_password(password: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
@@ -33,9 +40,13 @@ pub async fn hash_password(password: String) -> Result<String, String> {
     .map_err(|e| format!("Task join error during password hashing: {e}"))?
 }
 
-/// Verifies a password against an Argon2id hash asynchronously inside `spawn_blocking`.
+/// Verifies a password against either an Argon2id PHC string (`$argon2id$...`) or
+/// a Better Auth TypeScript `scrypt` hash (`<salt>:<64_byte_hex_key>`) inside `spawn_blocking`.
 pub async fn verify_password(hash: String, password: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
+        if is_legacy_scrypt_hash(&hash) {
+            return verify_scrypt_better_auth(&hash, &password);
+        }
         let parsed_hash = match PasswordHash::new(&hash) {
             Ok(h) => h,
             Err(e) => return Err(format!("Invalid password hash format: {e}")),
@@ -47,6 +58,204 @@ pub async fn verify_password(hash: String, password: String) -> Result<bool, Str
     })
     .await
     .map_err(|e| format!("Task join error during password verification: {e}"))?
+}
+
+/// Hashes a password using Better Auth's TypeScript `scrypt` parameters (`N=16384, r=16, p=1, dkLen=64`)
+/// and returns `<salt>:<hex_key>`. Useful for cross-implementation migration tests.
+pub fn hash_scrypt_better_auth(salt: &str, password: &str) -> Result<String, String> {
+    let dk = scrypt_derive(password.as_bytes(), salt.as_bytes(), 16384, 16, 1, 64)?;
+    Ok(format!("{salt}:{}", hex_encode(&dk)))
+}
+
+fn verify_scrypt_better_auth(hash: &str, password: &str) -> Result<bool, String> {
+    let (salt, expected_hex) = hash
+        .split_once(':')
+        .ok_or_else(|| "Invalid scrypt hash format: missing ':'".to_string())?;
+    let expected_bytes = hex_decode(expected_hex)?;
+    if expected_bytes.is_empty() {
+        return Err("Invalid scrypt derived key length".to_string());
+    }
+    let derived = scrypt_derive(
+        password.as_bytes(),
+        salt.as_bytes(),
+        16384,
+        16,
+        1,
+        expected_bytes.len(),
+    )?;
+    Ok(derived.ct_eq(&expected_bytes).into())
+}
+
+/// Pure-Rust RFC 7914 `scrypt` key derivation (`PBKDF2-HMAC-SHA256` + `ROMix` + `Salsa20/8`).
+fn scrypt_derive(
+    password: &[u8],
+    salt: &[u8],
+    n: usize,
+    r: usize,
+    p: usize,
+    dk_len: usize,
+) -> Result<Vec<u8>, String> {
+    if n == 0 || (n & (n - 1)) != 0 {
+        return Err("scrypt N must be a power of 2".to_string());
+    }
+    let block_size = 128 * r;
+    let mut b = pbkdf2_hmac_sha256(password, salt, 1, p * block_size);
+    let mut v = vec![0u32; n * 32 * r];
+    let mut xy = vec![0u32; 64 * r];
+
+    for chunk in b.chunks_exact_mut(block_size) {
+        scrypt_ro_mix(chunk, r, n, &mut v, &mut xy);
+    }
+
+    Ok(pbkdf2_hmac_sha256(password, &b, 1, dk_len))
+}
+
+fn scrypt_ro_mix(b: &mut [u8], r: usize, n: usize, v: &mut [u32], xy: &mut [u32]) {
+    let words_per_block = 32 * r;
+    let (x, y) = xy.split_at_mut(words_per_block);
+
+    for (i, chunk) in b.chunks_exact(4).enumerate() {
+        x[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+
+    for i in 0..n {
+        v[i * words_per_block..(i + 1) * words_per_block].copy_from_slice(x);
+        scrypt_block_mix(x, y, r);
+    }
+
+    for _ in 0..n {
+        let j = (x[words_per_block - 16] as usize) & (n - 1);
+        let v_slice = &v[j * words_per_block..(j + 1) * words_per_block];
+        for k in 0..words_per_block {
+            x[k] ^= v_slice[k];
+        }
+        scrypt_block_mix(x, y, r);
+    }
+
+    for (i, chunk) in b.chunks_exact_mut(4).enumerate() {
+        chunk.copy_from_slice(&x[i].to_le_bytes());
+    }
+}
+
+fn scrypt_block_mix(x: &mut [u32], y: &mut [u32], r: usize) {
+    let mut b_last = [0u32; 16];
+    b_last.copy_from_slice(&x[(2 * r - 1) * 16..2 * r * 16]);
+
+    for i in 0..(2 * r) {
+        let block = &x[i * 16..(i + 1) * 16];
+        for k in 0..16 {
+            b_last[k] ^= block[k];
+        }
+        salsa20_8(&mut b_last);
+        let dest_idx = (i / 2) + (i % 2) * r;
+        y[dest_idx * 16..(dest_idx + 1) * 16].copy_from_slice(&b_last);
+    }
+
+    x.copy_from_slice(y);
+}
+
+fn salsa20_8(b: &mut [u32; 16]) {
+    let mut x = *b;
+    for _ in 0..4 {
+        x[4] ^= x[0].wrapping_add(x[12]).rotate_left(7);
+        x[8] ^= x[4].wrapping_add(x[0]).rotate_left(9);
+        x[12] ^= x[8].wrapping_add(x[4]).rotate_left(13);
+        x[0] ^= x[12].wrapping_add(x[8]).rotate_left(18);
+
+        x[9] ^= x[5].wrapping_add(x[1]).rotate_left(7);
+        x[13] ^= x[9].wrapping_add(x[5]).rotate_left(9);
+        x[1] ^= x[13].wrapping_add(x[9]).rotate_left(13);
+        x[5] ^= x[1].wrapping_add(x[13]).rotate_left(18);
+
+        x[14] ^= x[10].wrapping_add(x[6]).rotate_left(7);
+        x[2] ^= x[14].wrapping_add(x[10]).rotate_left(9);
+        x[6] ^= x[2].wrapping_add(x[14]).rotate_left(13);
+        x[10] ^= x[6].wrapping_add(x[2]).rotate_left(18);
+
+        x[3] ^= x[15].wrapping_add(x[11]).rotate_left(7);
+        x[7] ^= x[3].wrapping_add(x[15]).rotate_left(9);
+        x[11] ^= x[7].wrapping_add(x[3]).rotate_left(13);
+        x[15] ^= x[11].wrapping_add(x[7]).rotate_left(18);
+
+        x[1] ^= x[0].wrapping_add(x[3]).rotate_left(7);
+        x[2] ^= x[1].wrapping_add(x[0]).rotate_left(9);
+        x[3] ^= x[2].wrapping_add(x[1]).rotate_left(13);
+        x[0] ^= x[3].wrapping_add(x[2]).rotate_left(18);
+
+        x[6] ^= x[5].wrapping_add(x[4]).rotate_left(7);
+        x[7] ^= x[6].wrapping_add(x[5]).rotate_left(9);
+        x[4] ^= x[7].wrapping_add(x[6]).rotate_left(13);
+        x[5] ^= x[4].wrapping_add(x[7]).rotate_left(18);
+
+        x[11] ^= x[10].wrapping_add(x[9]).rotate_left(7);
+        x[8] ^= x[11].wrapping_add(x[10]).rotate_left(9);
+        x[9] ^= x[8].wrapping_add(x[11]).rotate_left(13);
+        x[10] ^= x[9].wrapping_add(x[8]).rotate_left(18);
+
+        x[12] ^= x[15].wrapping_add(x[14]).rotate_left(7);
+        x[13] ^= x[12].wrapping_add(x[15]).rotate_left(9);
+        x[14] ^= x[13].wrapping_add(x[12]).rotate_left(13);
+        x[15] ^= x[14].wrapping_add(x[13]).rotate_left(18);
+    }
+    for i in 0..16 {
+        b[i] = b[i].wrapping_add(x[i]);
+    }
+}
+
+fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], c: u32, dk_len: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(dk_len);
+    let blocks = (dk_len + 31) / 32;
+    for block_idx in 1..=(blocks as u32) {
+        let mut mac = HmacSha256::new_from_slice(password).expect("HMAC accepts any key size");
+        mac.update(salt);
+        mac.update(&block_idx.to_be_bytes());
+        let mut u = mac.finalize().into_bytes();
+        let mut t = u;
+        for _ in 1..c {
+            let mut m = HmacSha256::new_from_slice(password).expect("HMAC accepts any key size");
+            m.update(&u);
+            u = m.finalize().into_bytes();
+            for (ti, ui) in t.iter_mut().zip(u.iter()) {
+                *ti ^= *ui;
+            }
+        }
+        let remaining = dk_len - out.len();
+        let take = remaining.min(32);
+        out.extend_from_slice(&t[..take]);
+    }
+    out
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
+    let trimmed = hex.trim();
+    if trimmed.len() % 2 != 0 {
+        return Err("Odd-length hex string".to_string());
+    }
+    let mut out = Vec::with_capacity(trimmed.len() / 2);
+    let bytes = trimmed.as_bytes();
+    for pair in bytes.chunks_exact(2) {
+        let hi = hex_nibble(pair[0]).ok_or_else(|| "Invalid hex character".to_string())?;
+        let lo = hex_nibble(pair[1]).ok_or_else(|| "Invalid hex character".to_string())?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Generates a cryptographically secure random token of the specified byte length,
@@ -156,6 +365,25 @@ mod tests {
         assert!(!verify_password(hash, "wrong-password".to_string())
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_legacy_scrypt_better_auth_password_verify() {
+        let salt = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        let password = "better-auth-ts-password";
+        let scrypt_hash = hash_scrypt_better_auth(salt, password).unwrap();
+
+        assert!(is_legacy_scrypt_hash(&scrypt_hash));
+        assert!(
+            verify_password(scrypt_hash.clone(), password.to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !verify_password(scrypt_hash, "wrong-password".to_string())
+                .await
+                .unwrap()
+        );
     }
 
     #[test]

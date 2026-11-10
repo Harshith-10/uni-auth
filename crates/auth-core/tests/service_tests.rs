@@ -1,9 +1,16 @@
 use std::sync::Arc;
-use time::Duration;
+use time::{Duration, OffsetDateTime};
 
-use auth_core::{AuthConfig, AuthService, EmailSender, InMemoryAuthAdapter, MockEmailSender};
+use auth_core::adapter::AuthAdapter;
+use auth_core::crypto::hash_scrypt_better_auth;
+use auth_core::models::CreateAccountInput;
+use auth_core::{
+    AuthConfig, AuthError, AuthService, EmailSender, InMemoryAuthAdapter, MockEmailSender,
+    SlidingWindowRateLimiter, TotpValidator,
+};
 use auth_proto::{
-    RequestPasswordResetRequest, ResetPasswordRequest, SignInEmailRequest, SignUpEmailRequest,
+    ChangePasswordRequest, DeleteUserRequest, RequestPasswordResetRequest, ResetPasswordRequest,
+    SignInEmailRequest, SignUpEmailRequest, UpdateUserRequest,
 };
 
 fn create_test_service() -> (AuthService, Arc<MockEmailSender>) {
@@ -50,7 +57,7 @@ async fn test_sign_up_and_sign_in_flow() {
 
     let signup_token = signup_res.token.unwrap();
 
-    // 2. Get session using the signed token from sign-up
+    // 2. Get session using the token from sign-up
     let session = service
         .get_session(&signup_token)
         .await
@@ -355,4 +362,155 @@ async fn test_session_revocation_methods() {
     // Revoke all
     service.revoke_sessions(&user_res.user.id).await.unwrap();
     assert!(service.get_session(&t3).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_scrypt_migration_and_account_unlink_and_user_lifecycle() {
+    let (service, _) = create_test_service();
+
+    // 1. Sign up a user and replace their password hash with a Better Auth scrypt hash
+    let signup = service
+        .sign_up_email(SignUpEmailRequest {
+            name: "Legacy TS User".to_string(),
+            email: "legacy@example.com".to_string(),
+            password: "migrated-password-123".to_string(),
+            image: None,
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let scrypt_hash =
+        hash_scrypt_better_auth("00112233445566778899aabbccddeeff", "migrated-password-123")
+            .unwrap();
+    service
+        .adapter()
+        .update_account_password(&signup.user.id, &scrypt_hash)
+        .await
+        .unwrap();
+
+    // 2. Sign in succeeds against the scrypt hash and transparently upgrades it to Argon2id
+    let signin = service
+        .sign_in_email(SignInEmailRequest {
+            email: "legacy@example.com".to_string(),
+            password: "migrated-password-123".to_string(),
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .expect("Sign-in with legacy scrypt hash should succeed");
+
+    let upgraded_acc = service
+        .adapter()
+        .find_account("credential", &signup.user.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        upgraded_acc.password.unwrap().starts_with("$argon2"),
+        "Legacy scrypt hash must be transparently upgraded to Argon2id on login"
+    );
+
+    // 3. Cannot unlink the last remaining authentication account
+    let unlink_err = service
+        .unlink_account(&signup.user.id, "credential", "")
+        .await
+        .unwrap_err();
+    assert_eq!(unlink_err.error_code(), "FAILED_TO_UNLINK_LAST_ACCOUNT");
+    assert_eq!(unlink_err.http_status(), 400);
+
+    // 4. Link a social account (with provider-specific account_id != user.id) and unlink it
+    service
+        .adapter()
+        .create_account(CreateAccountInput {
+            id: None,
+            user_id: signup.user.id.clone(),
+            account_id: "github_uid_99999".to_string(),
+            provider_id: "github".to_string(),
+            password: None,
+            access_token: Some("gho_token".to_string()),
+            refresh_token: None,
+            id_token: None,
+            access_token_expires_at: None,
+            refresh_token_expires_at: None,
+            scope: Some("read:user,user:email".to_string()),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service.list_accounts(&signup.user.id).await.unwrap().len(),
+        2
+    );
+
+    service
+        .unlink_account(&signup.user.id, "github", "")
+        .await
+        .expect("Unlinking social account by provider_id should succeed");
+    assert_eq!(
+        service.list_accounts(&signup.user.id).await.unwrap().len(),
+        1
+    );
+
+    // 5. Change password with revoke_other_sessions rotates session token
+    let change_res = service
+        .change_password(
+            &signup.user.id,
+            &signin.token,
+            ChangePasswordRequest {
+                current_password: "migrated-password-123".to_string(),
+                new_password: "rotated-password-456".to_string(),
+                revoke_other_sessions: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+    let rotated_token = change_res.token.expect("Must return rotated session token");
+    assert_ne!(rotated_token, signin.token);
+    assert!(service.get_session(&signin.token).await.unwrap().is_none());
+    assert!(service.get_session(&rotated_token).await.unwrap().is_some());
+
+    // 6. Update user profile and delete user
+    let updated_user = service
+        .update_user(
+            &signup.user.id,
+            UpdateUserRequest {
+                name: Some("Updated Name".to_string()),
+                image: Some("https://example.com/new.png".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated_user.user.unwrap().name, "Updated Name");
+
+    service
+        .delete_user(
+            &signup.user.id,
+            DeleteUserRequest {
+                password: Some("rotated-password-456".to_string()),
+                callback_url: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(service.get_session(&rotated_token).await.unwrap().is_none());
+}
+
+#[test]
+fn test_rate_limiter_and_totp_validator() {
+    let limiter = SlidingWindowRateLimiter::new(2, std::time::Duration::from_secs(60));
+    assert!(limiter.check("sign-in:127.0.0.1").is_ok());
+    assert!(limiter.check("sign-in:127.0.0.1").is_ok());
+    let err = limiter.check("sign-in:127.0.0.1").unwrap_err();
+    assert!(matches!(err, AuthError::RateLimitExceeded));
+    assert_eq!(err.http_status(), 429);
+
+    let totp = TotpValidator::default();
+    let secret = b"12345678901234567890";
+    let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
+    let code = totp.generate_at(secret, now);
+    assert_eq!(code.len(), 6);
+    assert!(totp.verify(secret, &code));
+    assert!(!totp.verify(secret, "000000"));
 }
