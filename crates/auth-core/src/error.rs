@@ -68,6 +68,21 @@ pub enum AuthError {
     #[error("Email and password sign up is disabled")]
     SignUpDisabled,
 
+    #[error("{0}")]
+    BannedUser(String),
+
+    #[error("{message}")]
+    Forbidden {
+        code: &'static str,
+        message: String,
+    },
+
+    #[error("{message}")]
+    BadRequest {
+        code: &'static str,
+        message: String,
+    },
+
     #[error("Database adapter error: {0}")]
     Adapter(#[from] AdapterError),
 
@@ -85,6 +100,20 @@ pub enum AuthError {
 }
 
 impl AuthError {
+    pub fn forbidden(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Forbidden {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
+        Self::BadRequest {
+            code,
+            message: message.into(),
+        }
+    }
+
     /// Maps to Better Auth standard error code string.
     pub fn error_code(&self) -> &'static str {
         match self {
@@ -109,6 +138,8 @@ impl AuthError {
             Self::ProviderNotFound(_) => error_codes::PROVIDER_NOT_FOUND,
             Self::EmailPasswordDisabled => error_codes::EMAIL_PASSWORD_DISABLED,
             Self::SignUpDisabled => error_codes::EMAIL_PASSWORD_SIGN_UP_DISABLED,
+            Self::BannedUser(_) => error_codes::BANNED_USER,
+            Self::Forbidden { code, .. } | Self::BadRequest { code, .. } => code,
             Self::RateLimitExceeded => "RATE_LIMITED",
             _ => "INTERNAL_SERVER_ERROR",
         }
@@ -126,13 +157,18 @@ impl AuthError {
             | Self::SocialAccountAlreadyLinked
             | Self::InvalidCallbackUrl
             | Self::EmailPasswordDisabled
-            | Self::SignUpDisabled => 400,
+            | Self::SignUpDisabled
+            | Self::BadRequest { .. } => 400,
             Self::InvalidEmailOrPassword
             | Self::InvalidPassword
             | Self::InvalidToken
             | Self::TokenExpired
             | Self::SessionExpired => 401,
-            Self::EmailNotVerified | Self::SessionNotFresh | Self::InvalidOrigin => 403,
+            Self::EmailNotVerified
+            | Self::SessionNotFresh
+            | Self::InvalidOrigin
+            | Self::BannedUser(_)
+            | Self::Forbidden { .. } => 403,
             Self::UserNotFound | Self::ProviderNotFound(_) => 404,
             Self::UserAlreadyExists => 422,
             Self::RateLimitExceeded => 429,

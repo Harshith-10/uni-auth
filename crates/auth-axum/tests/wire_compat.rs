@@ -3,11 +3,11 @@ use time::Duration;
 use tokio::net::TcpListener;
 
 use auth_axum::{auth_router, AuthState, OAuthProviderConfig};
-use auth_core::models::CreateUserInput;
+use auth_core::models::{AdminUpdateUserFields, CreateUserInput};
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
 use auth_proto::{
-    OkResponse, OneTimeTokenGenerateResponse, SessionAndUserResponse, SignInSocialResponse,
-    SignUpResponse,
+    AdminListUsersResponse, AdminPermissionResponse, AdminUserResponse, OkResponse,
+    OneTimeTokenGenerateResponse, SessionAndUserResponse, SignInSocialResponse, SignUpResponse,
 };
 use axum::Router;
 
@@ -361,4 +361,127 @@ async fn test_oauth_callback_redirect_hygiene_and_unverified_email_protection() 
         .await
         .unwrap();
     assert_eq!(cb_unverified.status(), 403);
+}
+
+#[tokio::test]
+async fn test_admin_http_endpoints_and_cookie_impersonation() {
+    let (base_url, service) = start_test_server().await;
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+
+    // 1. Register admin user and promote to "admin"
+    let admin_signup: SignUpResponse = client
+        .post(format!("{base_url}/sign-up/email"))
+        .json(&serde_json::json!({
+            "name": "Root Admin",
+            "email": "root@example.com",
+            "password": "rootpassword123"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    service
+        .adapter()
+        .update_user_admin(
+            &admin_signup.user.id,
+            AdminUpdateUserFields {
+                role: Some("admin".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // 2. POST /admin/create-user
+    let create_res = client
+        .post(format!("{base_url}/admin/create-user"))
+        .json(&serde_json::json!({
+            "name": "Created By Admin",
+            "email": "created@example.com",
+            "password": "createdpass123",
+            "role": "user"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create_res.status(), 200);
+    let created_user: AdminUserResponse = create_res.json().await.unwrap();
+    assert_eq!(created_user.user.email, "created@example.com");
+
+    // 3. GET /admin/list-users
+    let list_res: AdminListUsersResponse = client
+        .get(format!("{base_url}/admin/list-users?searchValue=created@"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list_res.total, 1);
+
+    // 4. POST /admin/has-permission
+    let perm_res: AdminPermissionResponse = client
+        .post(format!("{base_url}/admin/has-permission"))
+        .json(&serde_json::json!({
+            "permissions": {
+                "user": ["create", "ban", "impersonate"]
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(perm_res.success);
+
+    // 5. POST /admin/impersonate-user -> switches cookie session to target user
+    let imp_res = client
+        .post(format!("{base_url}/admin/impersonate-user"))
+        .json(&serde_json::json!({
+            "userId": created_user.user.id
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(imp_res.status(), 200);
+
+    let active_ses: SessionAndUserResponse = client
+        .get(format!("{base_url}/get-session"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(active_ses.user.id, created_user.user.id);
+    assert_eq!(
+        active_ses.session.impersonated_by.as_deref(),
+        Some(admin_signup.user.id.as_str())
+    );
+
+    // 6. POST /admin/stop-impersonating -> restores Root Admin cookie session
+    let stop_res = client
+        .post(format!("{base_url}/admin/stop-impersonating"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stop_res.status(), 200);
+
+    let restored_ses: SessionAndUserResponse = client
+        .get(format!("{base_url}/get-session"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(restored_ses.user.id, admin_signup.user.id);
+    assert!(restored_ses.session.impersonated_by.is_none());
 }

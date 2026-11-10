@@ -1,4 +1,4 @@
-//! Response payloads for Better Auth v1 API routes.
+//! Response payloads for Better Auth v1 API routes and plugins.
 //!
 //! All structs use `camelCase` for JSON serialization to match Better Auth TypeScript conventions.
 
@@ -201,4 +201,55 @@ pub struct VerifyEmailResponse {
     pub user: Option<UserWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+}
+
+// ──────────────────────────────────────────────
+// Admin Plugin Responses
+// ──────────────────────────────────────────────
+
+/// Envelope `{ "user": UserWire }` returned by `set-role`, `create-user`, `ban-user`, and `unban-user`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUserResponse {
+    pub user: UserWire,
+}
+
+/// `GET /api/auth/admin/list-users` response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminListUsersResponse {
+    pub users: Vec<UserWire>,
+    pub total: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+}
+
+/// `POST /api/auth/admin/list-user-sessions` response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminListUserSessionsResponse {
+    pub sessions: Vec<SessionWire>,
+}
+
+/// `{ "success": true }` response returned by `revoke-user-session`, `revoke-user-sessions`, and `remove-user`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminSuccessResponse {
+    pub success: bool,
+}
+
+impl AdminSuccessResponse {
+    pub fn ok() -> Self {
+        Self { success: true }
+    }
+}
+
+/// `POST /api/auth/admin/has-permission` response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminPermissionResponse {
+    pub error: Option<String>,
+    pub success: bool,
 }

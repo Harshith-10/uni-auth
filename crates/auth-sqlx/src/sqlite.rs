@@ -9,11 +9,12 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use auth_core::adapter::{AuthAdapter, BoxFuture};
+use auth_core::adapter::{filter_and_paginate_users, AuthAdapter, BoxFuture};
 use auth_core::error::AdapterError;
 use auth_core::models::{
-    AccountRecord, CreateAccountInput, CreateSessionInput, CreateUserInput,
-    CreateVerificationInput, SessionRecord, UserRecord, VerificationRecord,
+    AccountRecord, AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput,
+    CreateSessionInput, CreateUserInput, CreateVerificationInput, SessionRecord, UserRecord,
+    VerificationRecord,
 };
 
 const SQLITE_SCHEMA: &str = include_str!("../migrations/sqlite.sql");
@@ -39,6 +40,8 @@ fn map_user_row(row: SqliteRow) -> Result<UserRecord, AdapterError> {
     let email_verified_int: i64 = row
         .try_get("email_verified")
         .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let banned_int: i64 = row.try_get("banned").unwrap_or(0);
+    let ban_expires_str: Option<String> = row.try_get("ban_expires").ok().flatten();
     let created_at_str: String = row
         .try_get("created_at")
         .map_err(|e| AdapterError::Query(e.to_string()))?;
@@ -62,6 +65,10 @@ fn map_user_row(row: SqliteRow) -> Result<UserRecord, AdapterError> {
             .map_err(|e| AdapterError::Query(e.to_string()))?,
         created_at: parse_dt(&created_at_str),
         updated_at: parse_dt(&updated_at_str),
+        role: row.try_get("role").ok().flatten(),
+        banned: banned_int != 0,
+        ban_reason: row.try_get("ban_reason").ok().flatten(),
+        ban_expires: parse_opt_dt(ban_expires_str),
     })
 }
 
@@ -95,6 +102,7 @@ fn map_session_row(row: SqliteRow) -> Result<SessionRecord, AdapterError> {
             .map_err(|e| AdapterError::Query(e.to_string()))?,
         created_at: parse_dt(&created_at_str),
         updated_at: parse_dt(&updated_at_str),
+        impersonated_by: row.try_get("impersonated_by").ok().flatten(),
     })
 }
 
@@ -201,12 +209,23 @@ impl SqliteAuthAdapter {
         Ok(adapter)
     }
 
-    /// Executes the embedded Better Auth schema migration.
+    /// Executes the embedded Better Auth schema migration and idempotently upgrades older tables.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
         sqlx::query("PRAGMA foreign_keys = ON;")
             .execute(&self.pool)
             .await?;
         sqlx::raw_sql(SQLITE_SCHEMA).execute(&self.pool).await?;
+
+        // Idempotent column additions for existing pre-Admin SQLite database files
+        for stmt in [
+            r#"ALTER TABLE "user" ADD COLUMN role TEXT DEFAULT 'user'"#,
+            r#"ALTER TABLE "user" ADD COLUMN banned INTEGER NOT NULL DEFAULT 0"#,
+            r#"ALTER TABLE "user" ADD COLUMN ban_reason TEXT"#,
+            r#"ALTER TABLE "user" ADD COLUMN ban_expires TEXT"#,
+            r#"ALTER TABLE "session" ADD COLUMN impersonated_by TEXT"#,
+        ] {
+            let _ = sqlx::query(stmt).execute(&self.pool).await;
+        }
         Ok(())
     }
 
@@ -227,11 +246,12 @@ impl AuthAdapter for SqliteAuthAdapter {
             let now = OffsetDateTime::now_utc();
             let now_str = format_dt(now);
             let verified_int: i64 = if input.email_verified { 1 } else { 0 };
+            let default_role = "user".to_string();
 
             let res = sqlx::query(
                 r#"
-                INSERT INTO "user" (id, name, email, email_verified, image, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO "user" (id, name, email, email_verified, image, role, banned, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
                 "#,
             )
             .bind(&id)
@@ -239,6 +259,7 @@ impl AuthAdapter for SqliteAuthAdapter {
             .bind(&email)
             .bind(verified_int)
             .bind(&input.image)
+            .bind(&default_role)
             .bind(&now_str)
             .bind(&now_str)
             .execute(&pool)
@@ -253,6 +274,10 @@ impl AuthAdapter for SqliteAuthAdapter {
                     image: input.image,
                     created_at: now,
                     updated_at: now,
+                    role: Some(default_role),
+                    banned: false,
+                    ban_reason: None,
+                    ban_expires: None,
                 }),
                 Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
                     Err(AdapterError::UniqueViolation(e.message().to_string()))
@@ -370,7 +395,108 @@ impl AuthAdapter for SqliteAuthAdapter {
                 image: new_image,
                 created_at: current.created_at,
                 updated_at: now,
+                role: current.role,
+                banned: current.banned,
+                ban_reason: current.ban_reason,
+                ban_expires: current.ban_expires,
             })
+        })
+    }
+
+    fn update_user_admin(
+        &self,
+        id: &str,
+        fields: AdminUpdateUserFields,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        let pool = self.pool.clone();
+        let id = id.to_string();
+        Box::pin(async move {
+            let current_row = sqlx::query(r#"SELECT * FROM "user" WHERE id = ?"#)
+                .bind(&id)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?
+                .ok_or(AdapterError::NotFound)?;
+
+            let current = map_user_row(current_row)?;
+            let new_name = fields.name.unwrap_or(current.name);
+            let new_email = fields
+                .email
+                .map(|e| e.to_lowercase())
+                .unwrap_or(current.email);
+            let new_verified = fields.email_verified.unwrap_or(current.email_verified);
+            let new_image = fields.image.unwrap_or(current.image);
+            let new_role = fields.role.or(current.role);
+            let new_banned = fields.banned.unwrap_or(current.banned);
+            let new_ban_reason = fields.ban_reason.unwrap_or(current.ban_reason);
+            let new_ban_expires = fields.ban_expires.unwrap_or(current.ban_expires);
+
+            let verified_int: i64 = if new_verified { 1 } else { 0 };
+            let banned_int: i64 = if new_banned { 1 } else { 0 };
+            let ban_exp_str = format_opt_dt(new_ban_expires);
+            let now = OffsetDateTime::now_utc();
+            let now_str = format_dt(now);
+
+            let res = sqlx::query(
+                r#"
+                UPDATE "user"
+                SET name = ?, email = ?, email_verified = ?, image = ?,
+                    role = ?, banned = ?, ban_reason = ?, ban_expires = ?, updated_at = ?
+                WHERE id = ?
+                "#,
+            )
+            .bind(&new_name)
+            .bind(&new_email)
+            .bind(verified_int)
+            .bind(&new_image)
+            .bind(&new_role)
+            .bind(banned_int)
+            .bind(&new_ban_reason)
+            .bind(&ban_exp_str)
+            .bind(&now_str)
+            .bind(&id)
+            .execute(&pool)
+            .await;
+
+            match res {
+                Ok(_) => Ok(UserRecord {
+                    id,
+                    name: new_name,
+                    email: new_email,
+                    email_verified: new_verified,
+                    image: new_image,
+                    created_at: current.created_at,
+                    updated_at: now,
+                    role: new_role,
+                    banned: new_banned,
+                    ban_reason: new_ban_reason,
+                    ban_expires: new_ban_expires,
+                }),
+                Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                    Err(AdapterError::UniqueViolation(e.message().to_string()))
+                }
+                Err(e) => Err(AdapterError::Query(e.to_string())),
+            }
+        })
+    }
+
+    fn list_users(
+        &self,
+        filter: AdminListUsersFilter,
+    ) -> BoxFuture<'static, Result<(Vec<UserRecord>, usize), AdapterError>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let rows = sqlx::query(r#"SELECT * FROM "user""#)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            let users: Vec<UserRecord> = rows
+                .into_iter()
+                .map(map_user_row)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(filter_and_paginate_users(users, &filter))
         })
     }
 
@@ -608,8 +734,8 @@ impl AuthAdapter for SqliteAuthAdapter {
 
             let res = sqlx::query(
                 r#"
-                INSERT INTO "session" (id, user_id, token, expires_at, ip_address, user_agent, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO "session" (id, user_id, token, expires_at, ip_address, user_agent, impersonated_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 "#,
             )
             .bind(&id)
@@ -633,6 +759,57 @@ impl AuthAdapter for SqliteAuthAdapter {
                     user_agent: input.user_agent,
                     created_at: now,
                     updated_at: now,
+                    impersonated_by: None,
+                }),
+                Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                    Err(AdapterError::UniqueViolation(e.message().to_string()))
+                }
+                Err(e) => Err(AdapterError::Query(e.to_string())),
+            }
+        })
+    }
+
+    fn create_impersonated_session(
+        &self,
+        input: CreateSessionInput,
+        impersonated_by: String,
+    ) -> BoxFuture<'static, Result<SessionRecord, AdapterError>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let id = input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let now = OffsetDateTime::now_utc();
+            let now_str = format_dt(now);
+            let expires_str = format_dt(input.expires_at);
+
+            let res = sqlx::query(
+                r#"
+                INSERT INTO "session" (id, user_id, token, expires_at, ip_address, user_agent, impersonated_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&id)
+            .bind(&input.user_id)
+            .bind(&input.token)
+            .bind(&expires_str)
+            .bind(&input.ip_address)
+            .bind(&input.user_agent)
+            .bind(&impersonated_by)
+            .bind(&now_str)
+            .bind(&now_str)
+            .execute(&pool)
+            .await;
+
+            match res {
+                Ok(_) => Ok(SessionRecord {
+                    id,
+                    user_id: input.user_id,
+                    token: input.token,
+                    expires_at: input.expires_at,
+                    ip_address: input.ip_address,
+                    user_agent: input.user_agent,
+                    created_at: now,
+                    updated_at: now,
+                    impersonated_by: Some(impersonated_by),
                 }),
                 Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
                     Err(AdapterError::UniqueViolation(e.message().to_string()))

@@ -13,11 +13,104 @@ use uuid::Uuid;
 
 use crate::error::AdapterError;
 use crate::models::{
-    AccountRecord, CreateAccountInput, CreateSessionInput, CreateUserInput,
-    CreateVerificationInput, SessionRecord, UserRecord, VerificationRecord,
+    AccountRecord, AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput,
+    CreateSessionInput, CreateUserInput, CreateVerificationInput, SessionRecord, UserRecord,
+    VerificationRecord,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Applies Better Auth `admin/list-users` search, filter, sort, and pagination rules to a user list.
+pub fn filter_and_paginate_users(
+    users: impl IntoIterator<Item = UserRecord>,
+    filter: &AdminListUsersFilter,
+) -> (Vec<UserRecord>, usize) {
+    let mut matched: Vec<UserRecord> = users
+        .into_iter()
+        .filter(|u| {
+            if let Some(ref sv) = filter.search_value {
+                if !sv.is_empty() {
+                    let needle = sv.to_lowercase();
+                    let field_val = match filter.search_field.as_deref().unwrap_or("email") {
+                        "name" => u.name.to_lowercase(),
+                        "role" => u.role.as_deref().unwrap_or("user").to_lowercase(),
+                        _ => u.email.to_lowercase(),
+                    };
+                    let op = filter.search_operator.as_deref().unwrap_or("contains");
+                    let ok = match op {
+                        "starts_with" => field_val.starts_with(&needle),
+                        "ends_with" => field_val.ends_with(&needle),
+                        _ => field_val.contains(&needle),
+                    };
+                    if !ok {
+                        return false;
+                    }
+                }
+            }
+
+            if let Some(ref fv) = filter.filter_value {
+                let needle = fv.to_lowercase();
+                let field_val = match filter.filter_field.as_deref().unwrap_or("email") {
+                    "name" => u.name.to_lowercase(),
+                    "role" => u.role.as_deref().unwrap_or("user").to_lowercase(),
+                    "banned" => u.banned.to_string(),
+                    "emailVerified" | "email_verified" => u.email_verified.to_string(),
+                    "id" => u.id.to_lowercase(),
+                    _ => u.email.to_lowercase(),
+                };
+                let op = filter.filter_operator.as_deref().unwrap_or("eq");
+                let ok = match op {
+                    "ne" => field_val != needle,
+                    "contains" => field_val.contains(&needle),
+                    "starts_with" => field_val.starts_with(&needle),
+                    "ends_with" => field_val.ends_with(&needle),
+                    _ => field_val == needle,
+                };
+                if !ok {
+                    return false;
+                }
+            }
+
+            true
+        })
+        .collect();
+
+    let desc = filter
+        .sort_direction
+        .as_deref()
+        .map(|d| d.eq_ignore_ascii_case("desc"))
+        .unwrap_or(false);
+
+    match filter.sort_by.as_deref().unwrap_or("createdAt") {
+        "name" => matched.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+        "email" => matched.sort_by(|a, b| a.email.cmp(&b.email)),
+        "role" => matched.sort_by(|a, b| {
+            a.role
+                .as_deref()
+                .unwrap_or("user")
+                .cmp(b.role.as_deref().unwrap_or("user"))
+        }),
+        _ => matched.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+    }
+
+    if desc {
+        matched.reverse();
+    }
+
+    let total = matched.len();
+    let offset = filter.offset.unwrap_or(0);
+    let iter = matched.into_iter().skip(offset);
+    let page: Vec<UserRecord> = match filter.limit {
+        Some(limit) if limit > 0 => iter.take(limit).collect(),
+        _ => iter.collect(),
+    };
+
+    (page, total)
+}
 
 /// Object-safe persistence adapter interface for Better Auth data models.
 pub trait AuthAdapter: Send + Sync {
@@ -45,6 +138,15 @@ pub trait AuthAdapter: Send + Sync {
         name: Option<String>,
         image: Option<String>,
     ) -> BoxFuture<'static, Result<UserRecord, AdapterError>>;
+    fn update_user_admin(
+        &self,
+        id: &str,
+        fields: AdminUpdateUserFields,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>>;
+    fn list_users(
+        &self,
+        filter: AdminListUsersFilter,
+    ) -> BoxFuture<'static, Result<(Vec<UserRecord>, usize), AdapterError>>;
     fn delete_user(&self, id: &str) -> BoxFuture<'static, Result<(), AdapterError>>;
 
     // ── Accounts ──
@@ -86,6 +188,11 @@ pub trait AuthAdapter: Send + Sync {
     fn create_session(
         &self,
         input: CreateSessionInput,
+    ) -> BoxFuture<'static, Result<SessionRecord, AdapterError>>;
+    fn create_impersonated_session(
+        &self,
+        input: CreateSessionInput,
+        impersonated_by: String,
     ) -> BoxFuture<'static, Result<SessionRecord, AdapterError>>;
     fn find_session_by_token(
         &self,
@@ -182,6 +289,10 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 image: input.image,
                 created_at: now,
                 updated_at: now,
+                role: Some("user".to_string()),
+                banned: false,
+                ban_reason: None,
+                ban_expires: None,
             };
 
             s.email_to_id.insert(normalized_email, id.clone());
@@ -259,6 +370,77 @@ impl AuthAdapter for InMemoryAuthAdapter {
             } else {
                 Err(AdapterError::NotFound)
             }
+        })
+    }
+
+    fn update_user_admin(
+        &self,
+        id: &str,
+        fields: AdminUpdateUserFields,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        let store = Arc::clone(&self.store);
+        let id = id.to_string();
+        Box::pin(async move {
+            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            if let Some( ref new_email) = fields.email {
+                let normalized = new_email.to_lowercase();
+                if let Some(existing_id) = s.email_to_id.get(&normalized) {
+                    if existing_id != &id {
+                        return Err(AdapterError::UniqueViolation(format!(
+                            "User with email '{normalized}' already exists"
+                        )));
+                    }
+                }
+            }
+
+            let old_email = s.users.get(&id).map(|u| u.email.clone()).ok_or(AdapterError::NotFound)?;
+
+            if let Some( ref new_email) = fields.email {
+                let normalized = new_email.to_lowercase();
+                if normalized != old_email {
+                    s.email_to_id.remove(&old_email);
+                    s.email_to_id.insert(normalized, id.clone());
+                }
+            }
+
+            let user = s.users.get_mut(&id).ok_or(AdapterError::NotFound)?;
+            if let Some(name) = fields.name {
+                user.name = name;
+            }
+            if let Some(email) = fields.email {
+                user.email = email.to_lowercase();
+            }
+            if let Some(verified) = fields.email_verified {
+                user.email_verified = verified;
+            }
+            if let Some(img_opt) = fields.image {
+                user.image = img_opt;
+            }
+            if let Some(role) = fields.role {
+                user.role = Some(role);
+            }
+            if let Some(banned) = fields.banned {
+                user.banned = banned;
+            }
+            if let Some(reason_opt) = fields.ban_reason {
+                user.ban_reason = reason_opt;
+            }
+            if let Some(exp_opt) = fields.ban_expires {
+                user.ban_expires = exp_opt;
+            }
+            user.updated_at = OffsetDateTime::now_utc();
+            Ok(user.clone())
+        })
+    }
+
+    fn list_users(
+        &self,
+        filter: AdminListUsersFilter,
+    ) -> BoxFuture<'static, Result<(Vec<UserRecord>, usize), AdapterError>> {
+        let store = Arc::clone(&self.store);
+        Box::pin(async move {
+            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            Ok(filter_and_paginate_users(s.users.values().cloned(), &filter))
         })
     }
 
@@ -444,6 +626,33 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 user_agent: input.user_agent,
                 created_at: now,
                 updated_at: now,
+                impersonated_by: None,
+            };
+            s.sessions.insert(input.token, session.clone());
+            Ok(session)
+        })
+    }
+
+    fn create_impersonated_session(
+        &self,
+        input: CreateSessionInput,
+        impersonated_by: String,
+    ) -> BoxFuture<'static, Result<SessionRecord, AdapterError>> {
+        let store = Arc::clone(&self.store);
+        Box::pin(async move {
+            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let id = input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let now = OffsetDateTime::now_utc();
+            let session = SessionRecord {
+                id,
+                user_id: input.user_id,
+                token: input.token.clone(),
+                expires_at: input.expires_at,
+                ip_address: input.ip_address,
+                user_agent: input.user_agent,
+                created_at: now,
+                updated_at: now,
+                impersonated_by: Some(impersonated_by),
             };
             s.sessions.insert(input.token, session.clone());
             Ok(session)

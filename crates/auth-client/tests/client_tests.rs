@@ -8,10 +8,12 @@ use auth_client::{
     start_loopback_listener, AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage,
     TokenStorage,
 };
+use auth_core::models::AdminUpdateUserFields;
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
+use auth_proto::{AdminCreateUserRequest, RoleValue};
 use axum::Router;
 
-async fn start_test_server() -> String {
+async fn start_test_server() -> (String, Arc<AuthService>) {
     let adapter = Arc::new(InMemoryAuthAdapter::new());
     let config = AuthConfig {
         secret: b"auth-client-test-secret-32b-key".to_vec(),
@@ -27,7 +29,7 @@ async fn start_test_server() -> String {
     };
 
     let service = Arc::new(AuthService::new(config, adapter));
-    let state = AuthState::new(service);
+    let state = AuthState::new(Arc::clone(&service));
 
     let app = Router::new().nest("/api/auth", auth_router(state));
 
@@ -39,12 +41,12 @@ async fn start_test_server() -> String {
         axum::serve(listener, app).await.unwrap();
     });
 
-    base_url
+    (base_url, service)
 }
 
 #[tokio::test]
 async fn test_sign_up_and_token_storage() {
-    let base_url = start_test_server().await;
+    let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
     let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
 
@@ -69,7 +71,7 @@ async fn test_sign_up_and_token_storage() {
 
 #[tokio::test]
 async fn test_session_restoration_on_fresh_client_instance() {
-    let base_url = start_test_server().await;
+    let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
 
     // Client 1 signs in
@@ -104,7 +106,7 @@ async fn test_session_restoration_on_fresh_client_instance() {
 
 #[tokio::test]
 async fn test_sign_out_clears_local_keyring_and_server_session() {
-    let base_url = start_test_server().await;
+    let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
     let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
 
@@ -128,7 +130,7 @@ async fn test_sign_out_clears_local_keyring_and_server_session() {
 
 #[tokio::test]
 async fn test_loopback_listener_and_ott_exchange() {
-    let base_url = start_test_server().await;
+    let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
     let client = Arc::new(BetterAuthNativeClient::new(base_url.clone(), Arc::clone(&storage) as Arc<dyn TokenStorage>));
 
@@ -177,7 +179,7 @@ async fn test_loopback_listener_and_ott_exchange() {
 
 #[tokio::test]
 async fn test_auth_store_reactive_notifications() {
-    let base_url = start_test_server().await;
+    let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
     let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
 
@@ -210,4 +212,52 @@ async fn test_auth_store_reactive_notifications() {
     store.sign_out().await.unwrap();
     assert_eq!(store.status(), AuthStatus::Unauthenticated);
     assert_eq!(transitions.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn test_native_client_admin_operations_and_impersonation() {
+    let (base_url, service) = start_test_server().await;
+    let storage = Arc::new(MockTokenStorage::new());
+    let client = Arc::new(BetterAuthNativeClient::new(
+        base_url,
+        Arc::clone(&storage) as Arc<dyn TokenStorage>,
+    ));
+    let store = AuthStore::new(Arc::clone(&client));
+
+    let admin_signup = client
+        .sign_up_email("Native Admin", "native_admin@example.com", "adminpass123", Some(true))
+        .await
+        .unwrap();
+
+    service
+        .adapter()
+        .update_user_admin(
+            &admin_signup.user.id,
+            AdminUpdateUserFields {
+                role: Some("admin".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    store.restore_session().await.unwrap();
+
+    let created = client
+        .admin_create_user(AdminCreateUserRequest {
+            email: "target_user@example.com".to_string(),
+            password: Some("targetpass123".to_string()),
+            name: "Target User".to_string(),
+            role: Some(RoleValue::Single("user".to_string())),
+            data: None,
+        })
+        .await
+        .unwrap();
+
+    // Impersonate target user via AuthStore
+    let imp = store.impersonate_user(&created.user.id).await.unwrap();
+    assert_eq!(imp.user.email, "target_user@example.com");
+
+    // Stop impersonating restores admin session in AuthStore
+    let restored = store.stop_impersonating().await.unwrap();
+    assert_eq!(restored.user.email, "native_admin@example.com");
 }

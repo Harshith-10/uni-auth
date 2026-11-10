@@ -1,13 +1,16 @@
 //! High-level native HTTP client with automated Bearer token attachment and response capture.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use thiserror::Error;
 
 use auth_proto::{
-    AuthErrorResponse, OneTimeTokenGenerateResponse, OneTimeTokenVerifyRequest,
-    RevokeSessionRequest, SessionAndUserResponse, SessionWire, SignInEmailRequest, SignInResponse,
-    SignOutResponse, SignUpEmailRequest, SignUpResponse, StatusResponse,
+    AdminBanUserRequest, AdminCreateUserRequest, AdminListUserSessionsResponse,
+    AdminListUsersResponse, AdminSetRoleRequest, AdminSetUserPasswordRequest, AdminSuccessResponse,
+    AdminUserIdRequest, AdminUserResponse, AuthErrorResponse, OneTimeTokenGenerateResponse,
+    OneTimeTokenVerifyRequest, RevokeSessionRequest, RoleValue, SessionAndUserResponse,
+    SessionWire, SignInEmailRequest, SignInResponse, SignOutResponse, SignUpEmailRequest,
+    SignUpResponse, StatusResponse,
 };
 use crate::storage::{StorageError, TokenStorage};
 
@@ -38,12 +41,14 @@ pub enum ClientError {
 /// Features:
 /// - Automatically injects `Authorization: Bearer <token>` from secure storage.
 /// - Automatically intercepts `set-auth-token` response headers and updates the storage.
+/// - Automatically stashes and restores the admin session token across `admin_impersonate_user` / `admin_stop_impersonating`.
 /// - Automatically clears token storage upon `sign_out()`.
 #[derive(Clone)]
 pub struct BetterAuthNativeClient {
     pub(crate) base_url: String,
     pub(crate) http: reqwest::Client,
     pub(crate) storage: Arc<dyn TokenStorage>,
+    pub(crate) admin_token_backup: Arc<RwLock<Option<String>>>,
 }
 
 impl BetterAuthNativeClient {
@@ -63,6 +68,7 @@ impl BetterAuthNativeClient {
             base_url,
             http,
             storage,
+            admin_token_backup: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -291,6 +297,9 @@ impl BetterAuthNativeClient {
 
         // Always delete local token regardless of server response
         let _ = self.storage.delete_token();
+        if let Ok(mut backup) = self.admin_token_backup.write() {
+            *backup = None;
+        }
 
         let status = res.status().as_u16();
         if status >= 400 {
@@ -376,6 +385,409 @@ impl BetterAuthNativeClient {
         }
 
         Ok(body)
+    }
+
+    // ──────────────────────────────────────────────
+    // Admin Plugin Operations
+    // ──────────────────────────────────────────────
+
+    /// Lists users via `GET /api/auth/admin/list-users`.
+    pub async fn admin_list_users(
+        &self,
+        search_value: Option<&str>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<AdminListUsersResponse, ClientError> {
+        let mut req = self
+            .http
+            .get(format!("{}/admin/list-users", self.base_url))
+            .headers(self.prepare_headers());
+
+        let mut query_params: Vec<(&str, String)> = Vec::new();
+        if let Some(sv) = search_value {
+            if !sv.is_empty() {
+                query_params.push(("searchValue", sv.to_string()));
+            }
+        }
+        if let Some(l) = limit {
+            query_params.push(("limit", l.to_string()));
+        }
+        if let Some(o) = offset {
+            query_params.push(("offset", o.to_string()));
+        }
+        if !query_params.is_empty() {
+            req = req.query(&query_params);
+        }
+
+        let res = req.send().await?;
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_LIST_USERS_FAILED", "Failed to list users")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
+    }
+
+    /// Creates a new user as an admin (`POST /api/auth/admin/create-user`).
+    pub async fn admin_create_user(
+        &self,
+        payload: AdminCreateUserRequest,
+    ) -> Result<AdminUserResponse, ClientError> {
+        let res = self
+            .http
+            .post(format!("{}/admin/create-user", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_CREATE_USER_FAILED", "Failed to create user")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
+    }
+
+    /// Updates a user's role (`POST /api/auth/admin/set-role`).
+    pub async fn admin_set_role(
+        &self,
+        user_id: impl Into<String>,
+        role: impl Into<String>,
+    ) -> Result<AdminUserResponse, ClientError> {
+        let payload = AdminSetRoleRequest {
+            user_id: user_id.into(),
+            role: RoleValue::Single(role.into()),
+        };
+
+        let res = self
+            .http
+            .post(format!("{}/admin/set-role", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_SET_ROLE_FAILED", "Failed to set role")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
+    }
+
+    /// Bans a user (`POST /api/auth/admin/ban-user`).
+    pub async fn admin_ban_user(
+        &self,
+        user_id: impl Into<String>,
+        ban_reason: Option<String>,
+        ban_expires_in: Option<i64>,
+    ) -> Result<AdminUserResponse, ClientError> {
+        let payload = AdminBanUserRequest {
+            user_id: user_id.into(),
+            ban_reason,
+            ban_expires_in,
+        };
+
+        let res = self
+            .http
+            .post(format!("{}/admin/ban-user", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_BAN_USER_FAILED", "Failed to ban user")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
+    }
+
+    /// Unbans a user (`POST /api/auth/admin/unban-user`).
+    pub async fn admin_unban_user(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<AdminUserResponse, ClientError> {
+        let payload = AdminUserIdRequest {
+            user_id: user_id.into(),
+        };
+
+        let res = self
+            .http
+            .post(format!("{}/admin/unban-user", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_UNBAN_USER_FAILED", "Failed to unban user")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
+    }
+
+    /// Impersonates a user (`POST /api/auth/admin/impersonate-user`), stashing the admin's
+    /// original token so `admin_stop_impersonating` can restore it.
+    pub async fn admin_impersonate_user(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<SessionAndUserResponse, ClientError> {
+        let previous_token = self.storage.get_token().ok().flatten();
+
+        let res = self
+            .http
+            .post(format!("{}/admin/impersonate-user", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&AdminUserIdRequest {
+                user_id: user_id.into(),
+            })
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_IMPERSONATE_FAILED", "Failed to impersonate user")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        // Stash admin token from header or previous storage
+        let stashed = res
+            .headers()
+            .get("set-admin-auth-token")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .or(previous_token);
+
+        if let Ok(mut guard) = self.admin_token_backup.write() {
+            *guard = stashed;
+        }
+
+        let captured = self.handle_auth_token_header(res.headers());
+        let body: SessionAndUserResponse = res.json().await?;
+        if !captured {
+            let _ = self.storage.set_token(&body.session.token);
+        }
+
+        Ok(body)
+    }
+
+    /// Stops impersonating and restores the original admin session (`POST /api/auth/admin/stop-impersonating`).
+    pub async fn admin_stop_impersonating(&self) -> Result<SessionAndUserResponse, ClientError> {
+        let mut headers = self.prepare_headers();
+        let stashed = self.admin_token_backup.read().ok().and_then(|g| g.clone());
+        if let Some(ref admin_tok) = stashed {
+            if let Ok(hv) = HeaderValue::from_str(admin_tok) {
+                headers.insert("x-admin-auth-token", hv);
+            }
+        }
+
+        let res = self
+            .http
+            .post(format!("{}/admin/stop-impersonating", self.base_url))
+            .headers(headers)
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("STOP_IMPERSONATING_FAILED", "Failed to stop impersonating")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        let captured = self.handle_auth_token_header(res.headers());
+        let body: SessionAndUserResponse = res.json().await?;
+        if !captured {
+            let _ = self.storage.set_token(&body.session.token);
+        }
+        if let Ok(mut guard) = self.admin_token_backup.write() {
+            *guard = None;
+        }
+
+        Ok(body)
+    }
+
+    /// Permanently removes a user (`POST /api/auth/admin/remove-user`).
+    pub async fn admin_remove_user(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<AdminSuccessResponse, ClientError> {
+        let res = self
+            .http
+            .post(format!("{}/admin/remove-user", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&AdminUserIdRequest {
+                user_id: user_id.into(),
+            })
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_REMOVE_USER_FAILED", "Failed to remove user")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
+    }
+
+    /// Sets a user's password as an admin (`POST /api/auth/admin/set-user-password`).
+    pub async fn admin_set_user_password(
+        &self,
+        user_id: impl Into<String>,
+        new_password: impl Into<String>,
+    ) -> Result<StatusResponse, ClientError> {
+        let res = self
+            .http
+            .post(format!("{}/admin/set-user-password", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&AdminSetUserPasswordRequest {
+                user_id: user_id.into(),
+                new_password: new_password.into(),
+            })
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_SET_PASSWORD_FAILED", "Failed to set password")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
+    }
+
+    /// Lists all active sessions for a specific user (`POST /api/auth/admin/list-user-sessions`).
+    pub async fn admin_list_user_sessions(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<AdminListUserSessionsResponse, ClientError> {
+        let res = self
+            .http
+            .post(format!("{}/admin/list-user-sessions", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&AdminUserIdRequest {
+                user_id: user_id.into(),
+            })
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_LIST_SESSIONS_FAILED", "Failed to list user sessions")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
+    }
+
+    /// Revokes all active sessions for a specific user (`POST /api/auth/admin/revoke-user-sessions`).
+    pub async fn admin_revoke_user_sessions(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<AdminSuccessResponse, ClientError> {
+        let res = self
+            .http
+            .post(format!("{}/admin/revoke-user-sessions", self.base_url))
+            .headers(self.prepare_headers())
+            .json(&AdminUserIdRequest {
+                user_id: user_id.into(),
+            })
+            .send()
+            .await?;
+
+        let status = res.status().as_u16();
+        if status >= 400 {
+            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
+                AuthErrorResponse::new("ADMIN_REVOKE_SESSIONS_FAILED", "Failed to revoke sessions")
+                    .with_status(status)
+            });
+            return Err(ClientError::Api {
+                status,
+                code: err_body.code,
+                message: err_body.message,
+            });
+        }
+
+        Ok(res.json().await?)
     }
 
     /// Custom authenticated request helper for calling application-specific protected APIs.

@@ -3,7 +3,8 @@ use time::{Duration, OffsetDateTime};
 
 use auth_core::adapter::AuthAdapter;
 use auth_core::models::{
-    CreateAccountInput, CreateSessionInput, CreateUserInput, CreateVerificationInput,
+    AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput, CreateSessionInput,
+    CreateUserInput, CreateVerificationInput,
 };
 use auth_core::{AuthConfig, AuthService};
 use auth_proto::{SignInEmailRequest, SignUpEmailRequest};
@@ -30,6 +31,8 @@ async fn test_sqlite_adapter_direct_crud() {
     assert_eq!(user.name, "Sqlite User");
     assert_eq!(user.email, "sqlite@example.com");
     assert!(!user.email_verified);
+    assert_eq!(user.role.as_deref(), Some("user"));
+    assert!(!user.banned);
 
     // 2. Find by email (case-insensitive)
     let found = adapter
@@ -51,13 +54,39 @@ async fn test_sqlite_adapter_direct_crud() {
         .await;
     assert!(dup_err.is_err());
 
-    // 4. Update email verified
+    // 4. Update email verified & Admin fields
     adapter
         .update_user_email_verified(&user.id, true)
         .await
         .unwrap();
     let updated = adapter.find_user_by_id(&user.id).await.unwrap().unwrap();
     assert!(updated.email_verified);
+
+    let admin_updated = adapter
+        .update_user_admin(
+            &user.id,
+            AdminUpdateUserFields {
+                role: Some("admin".to_string()),
+                banned: Some(true),
+                ban_reason: Some(Some("Testing ban".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update_user_admin should succeed");
+    assert_eq!(admin_updated.role.as_deref(), Some("admin"));
+    assert!(admin_updated.banned);
+    assert_eq!(admin_updated.ban_reason.as_deref(), Some("Testing ban"));
+
+    let (listed_users, total) = adapter
+        .list_users(AdminListUsersFilter {
+            search_value: Some("sqlite@".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(listed_users[0].id, user.id);
 
     // 5. Account creation & lookup
     let account = adapter
@@ -133,7 +162,7 @@ async fn test_sqlite_adapter_direct_crud() {
         Some("openid,email,profile")
     );
 
-    // 6. Session lifecycle
+    // 6. Session & Impersonated session lifecycle
     let session = adapter
         .create_session(CreateSessionInput {
             id: None,
@@ -152,10 +181,30 @@ async fn test_sqlite_adapter_direct_crud() {
         .unwrap()
         .expect("Session should be found");
     assert_eq!(found_ses.user_id, user.id);
+    assert_eq!(found_ses.impersonated_by, None);
+
+    let imp_session = adapter
+        .create_impersonated_session(
+            CreateSessionInput {
+                id: None,
+                user_id: user.id.clone(),
+                token: "sqlite_imp_token_456".to_string(),
+                expires_at: OffsetDateTime::now_utc() + Duration::hours(1),
+                ip_address: Some("127.0.0.1".to_string()),
+                user_agent: Some("AdminAgent/1.0".to_string()),
+            },
+            "admin_user_id_99".to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        imp_session.impersonated_by.as_deref(),
+        Some("admin_user_id_99")
+    );
 
     // List sessions
     let user_sessions = adapter.list_sessions_by_user_id(&user.id).await.unwrap();
-    assert_eq!(user_sessions.len(), 1);
+    assert_eq!(user_sessions.len(), 2);
 
     // 7. Verification atomic consumption
     let ver = adapter

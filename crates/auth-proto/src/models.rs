@@ -1,18 +1,21 @@
 //! Core wire models: User, Session, Account entities in camelCase JSON.
 //!
-//! These map directly to the Better Auth core schema:
+//! These map directly to the Better Auth core and Admin plugin schemas:
 //! - <https://better-auth.com/docs/concepts/database>
 //! - <https://better-auth.com/docs/concepts/users-accounts>
+//! - <https://better-auth.com/docs/plugins/admin>
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 /// User entity as seen on the wire (JSON responses).
 ///
-/// Matches the Better Auth `User` type with camelCase field names.
+/// Matches the Better Auth `User` type with camelCase field names, including optional
+/// `admin` plugin fields (`role`, `banned`, `banReason`, `banExpires`).
 /// The `password` field from the `account` table is **never** included here.
 ///
 /// Reference: `.reference/better-auth/packages/better-auth/src/api/routes/sign-up.ts` lines 116-158
+/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/schema.ts` lines 3-28
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UserWire {
@@ -39,13 +42,35 @@ pub struct UserWire {
     /// When the user was last updated (ISO-8601)
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+
+    /// User role or comma-separated roles (Admin plugin, e.g. `"user"`, `"admin"`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+
+    /// Whether the user is banned (Admin plugin)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banned: Option<bool>,
+
+    /// Reason for the ban if banned (Admin plugin)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ban_reason: Option<String>,
+
+    /// Expiration timestamp of the ban if temporary (Admin plugin)
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
+    pub ban_expires: Option<OffsetDateTime>,
 }
 
 /// Session entity as seen on the wire (JSON responses).
 ///
-/// Matches the Better Auth `Session` type with camelCase field names.
+/// Matches the Better Auth `Session` type with camelCase field names, including
+/// optional `impersonatedBy` from the `admin` plugin.
 ///
 /// Reference: `.reference/better-auth/packages/better-auth/src/api/routes/session.ts` lines 50-57
+/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/schema.ts` lines 29-37
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionWire {
@@ -77,6 +102,10 @@ pub struct SessionWire {
     /// When the session was last updated (ISO-8601)
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+
+    /// ID of the admin user impersonating this session (Admin plugin)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impersonated_by: Option<String>,
 }
 
 /// Account entity as seen on the wire (JSON responses).

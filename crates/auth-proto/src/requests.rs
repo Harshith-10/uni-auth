@@ -1,9 +1,10 @@
-//! Request payloads for all Better Auth v1 API routes.
+//! Request payloads for all Better Auth v1 API routes and plugins.
 //!
-//! Each struct matches the Zod body schema from the upstream TypeScript source.
+//! Each struct matches the Zod body/query schema from the upstream TypeScript source.
 //! Note: Better Auth uses `callbackURL`, `newUserCallbackURL`, and `errorCallbackURL`
 //! with uppercase `URL`, so explicit `#[serde(rename = ...)]` attributes are used.
 
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 // ──────────────────────────────────────────────
@@ -316,4 +317,156 @@ pub struct DeleteUserRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub callback_url: Option<String>,
+}
+
+// ──────────────────────────────────────────────
+// Admin Plugin Requests
+// ──────────────────────────────────────────────
+
+/// Role specification accepting either a single role string (`"admin"`) or an array (`["admin", "user"]`).
+///
+/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/routes.ts` lines 57-76
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum RoleValue {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl RoleValue {
+    /// Normalizes into a comma-separated role string (`"admin,user"`).
+    pub fn to_csv(&self) -> String {
+        match self {
+            Self::Single(s) => s.clone(),
+            Self::Multiple(list) => list.join(","),
+        }
+    }
+
+    /// Returns individual role strings.
+    pub fn to_vec(&self) -> Vec<String> {
+        match self {
+            Self::Single(s) => s
+                .split(',')
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty())
+                .collect(),
+            Self::Multiple(list) => list
+                .iter()
+                .flat_map(|s| s.split(','))
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty())
+                .collect(),
+        }
+    }
+}
+
+/// `POST /api/auth/admin/set-role`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminSetRoleRequest {
+    pub user_id: String,
+    pub role: RoleValue,
+}
+
+/// `GET /api/auth/admin/get-user?id=...`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminGetUserQuery {
+    pub id: String,
+}
+
+/// `POST /api/auth/admin/create-user`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminCreateUserRequest {
+    pub email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<RoleValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// `POST /api/auth/admin/update-user`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUpdateUserRequest {
+    pub user_id: String,
+    pub data: serde_json::Map<String, serde_json::Value>,
+}
+
+/// `GET /api/auth/admin/list-users` query parameters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminListUsersQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_operator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_direction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_operator: Option<String>,
+}
+
+/// Common `{ userId }` body for `list-user-sessions`, `unban-user`, `impersonate-user`,
+/// `revoke-user-sessions`, and `remove-user`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUserIdRequest {
+    pub user_id: String,
+}
+
+/// `POST /api/auth/admin/ban-user`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminBanUserRequest {
+    pub user_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ban_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ban_expires_in: Option<i64>,
+}
+
+/// `POST /api/auth/admin/revoke-user-session`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminRevokeUserSessionRequest {
+    pub session_token: String,
+}
+
+/// `POST /api/auth/admin/set-user-password`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminSetUserPasswordRequest {
+    pub user_id: String,
+    pub new_password: String,
+}
+
+/// `POST /api/auth/admin/has-permission`
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminHasPermissionRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<HashMap<String, Vec<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<HashMap<String, Vec<String>>>,
 }

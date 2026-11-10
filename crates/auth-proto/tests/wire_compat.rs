@@ -13,6 +13,10 @@ fn test_user_wire_serialization_exact_camel_case() {
         image: Some("https://example.com/avatar.png".to_string()),
         created_at: now,
         updated_at: now,
+        role: None,
+        banned: None,
+        ban_reason: None,
+        ban_expires: None,
     };
 
     let val = serde_json::to_value(&user).unwrap();
@@ -51,6 +55,7 @@ fn test_user_wire_deserialization_from_fixture() {
     assert_eq!(user.email, "jane@example.com");
     assert!(user.email_verified);
     assert_eq!(user.image, None);
+    assert_eq!(user.role, None);
 }
 
 #[test]
@@ -72,12 +77,44 @@ fn test_session_wire_serialization_and_deserialization() {
     assert_eq!(session.token, "tok_xyz789");
     assert_eq!(session.ip_address.as_deref(), Some("127.0.0.1"));
     assert_eq!(session.user_agent.as_deref(), Some("Mozilla/5.0"));
+    assert_eq!(session.impersonated_by, None);
 
     let serialized = serde_json::to_value(&session).unwrap();
     assert_eq!(serialized["userId"], "usr_12345");
     assert_eq!(serialized["expiresAt"], "2026-02-15T12:00:00Z");
     assert!(serialized.get("user_id").is_none());
     assert!(serialized.get("expires_at").is_none());
+}
+
+#[test]
+fn test_admin_wire_models_and_requests() {
+    let user_fixture = json!({
+        "id": "usr_admin_1",
+        "name": "System Admin",
+        "email": "admin@example.com",
+        "emailVerified": true,
+        "role": "admin",
+        "banned": false,
+        "createdAt": "2026-01-15T12:00:00Z",
+        "updatedAt": "2026-01-15T12:30:00Z"
+    });
+    let user: UserWire = serde_json::from_value(user_fixture).unwrap();
+    assert_eq!(user.role.as_deref(), Some("admin"));
+    assert_eq!(user.banned, Some(false));
+
+    let set_role_single: AdminSetRoleRequest = serde_json::from_value(json!({
+        "userId": "u_1",
+        "role": "admin"
+    }))
+    .unwrap();
+    assert_eq!(set_role_single.role.to_csv(), "admin");
+
+    let set_role_multi: AdminSetRoleRequest = serde_json::from_value(json!({
+        "userId": "u_1",
+        "role": ["admin", "user"]
+    }))
+    .unwrap();
+    assert_eq!(set_role_multi.role.to_csv(), "admin,user");
 }
 
 #[test]

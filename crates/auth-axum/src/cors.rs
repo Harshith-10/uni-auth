@@ -1,6 +1,6 @@
 //! Preconfigured CORS layer helper for Better Auth and native clients.
 //!
-//! Exposes `set-auth-token` and `set-ott` in `Access-Control-Expose-Headers`
+//! Exposes `set-auth-token`, `set-admin-auth-token`, and `set-ott` in `Access-Control-Expose-Headers`
 //! and allows credentials for seamless web and desktop cross-origin requests.
 
 use axum::http::{header, HeaderName, HeaderValue, Method};
@@ -26,9 +26,11 @@ pub fn build_auth_cors_layer(allowed_origins: &[&str]) -> CorsLayer {
             header::COOKIE,
             header::ACCEPT,
             header::ORIGIN,
+            HeaderName::from_static("x-admin-auth-token"),
         ])
         .expose_headers([
             HeaderName::from_static("set-auth-token"),
+            HeaderName::from_static("set-admin-auth-token"),
             HeaderName::from_static("set-ott"),
             header::SET_COOKIE,
         ]);

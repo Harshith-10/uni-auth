@@ -21,6 +21,10 @@ pub struct UserRecord {
     pub image: Option<String>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+    pub role: Option<String>,
+    pub banned: bool,
+    pub ban_reason: Option<String>,
+    pub ban_expires: Option<OffsetDateTime>,
 }
 
 impl UserRecord {
@@ -33,6 +37,10 @@ impl UserRecord {
             image: self.image.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
+            role: self.role.clone(),
+            banned: Some(self.banned),
+            ban_reason: self.ban_reason.clone(),
+            ban_expires: self.ban_expires,
         }
     }
 }
@@ -48,6 +56,7 @@ pub struct SessionRecord {
     pub user_agent: Option<String>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+    pub impersonated_by: Option<String>,
 }
 
 impl SessionRecord {
@@ -61,6 +70,7 @@ impl SessionRecord {
             user_agent: self.user_agent.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
+            impersonated_by: self.impersonated_by.clone(),
         }
     }
 
@@ -131,7 +141,7 @@ impl VerificationRecord {
 }
 
 // ──────────────────────────────────────────────
-// Creation Inputs
+// Creation & Admin Update Inputs
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -141,6 +151,34 @@ pub struct CreateUserInput {
     pub email: String,
     pub image: Option<String>,
     pub email_verified: bool,
+}
+
+/// Partial update payload used by Admin plugin operations (`set-role`, `ban-user`, `unban-user`, `update-user`).
+#[derive(Debug, Clone, Default)]
+pub struct AdminUpdateUserFields {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub email_verified: Option<bool>,
+    pub image: Option<Option<String>>,
+    pub role: Option<String>,
+    pub banned: Option<bool>,
+    pub ban_reason: Option<Option<String>>,
+    pub ban_expires: Option<Option<OffsetDateTime>>,
+}
+
+/// Query and pagination options for `AuthAdapter::list_users`.
+#[derive(Debug, Clone, Default)]
+pub struct AdminListUsersFilter {
+    pub search_value: Option<String>,
+    pub search_field: Option<String>,
+    pub search_operator: Option<String>,
+    pub filter_field: Option<String>,
+    pub filter_value: Option<String>,
+    pub filter_operator: Option<String>,
+    pub sort_by: Option<String>,
+    pub sort_direction: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Clone)]

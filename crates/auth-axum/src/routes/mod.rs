@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod auth;
 pub mod ok;
 pub mod one_time_token;
@@ -75,6 +76,34 @@ where
         .route("/callback/{provider}", get(social::oauth_callback))
         .route("/list-accounts", get(social::list_accounts))
         .route("/unlink-account", post(social::unlink_account))
+        // Admin Plugin
+        .route("/admin/set-role", post(admin::set_role))
+        .route("/admin/get-user", get(admin::get_user))
+        .route("/admin/create-user", post(admin::create_user))
+        .route("/admin/update-user", post(admin::admin_update_user))
+        .route("/admin/list-users", get(admin::list_users))
+        .route(
+            "/admin/list-user-sessions",
+            post(admin::list_user_sessions),
+        )
+        .route("/admin/ban-user", post(admin::ban_user))
+        .route("/admin/unban-user", post(admin::unban_user))
+        .route("/admin/impersonate-user", post(admin::impersonate_user))
+        .route(
+            "/admin/stop-impersonating",
+            post(admin::stop_impersonating),
+        )
+        .route(
+            "/admin/revoke-user-session",
+            post(admin::revoke_user_session),
+        )
+        .route(
+            "/admin/revoke-user-sessions",
+            post(admin::revoke_user_sessions),
+        )
+        .route("/admin/remove-user", post(admin::remove_user))
+        .route("/admin/set-user-password", post(admin::set_user_password))
+        .route("/admin/has-permission", post(admin::user_has_permission))
 }
 
 /// Constructs a self-contained auth router with `AuthState` applied (state: `()`).

@@ -2,14 +2,16 @@ use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 
 use auth_core::crypto::hash_scrypt_better_auth;
-use auth_core::models::{CreateAccountInput, CreateUserInput};
+use auth_core::models::{AdminUpdateUserFields, CreateAccountInput, CreateUserInput, RequestMeta};
 use auth_core::{
     AuthConfig, AuthError, AuthService, EmailSender, InMemoryAuthAdapter, MockEmailSender,
     SlidingWindowRateLimiter, TotpValidator,
 };
 use auth_proto::{
-    ChangePasswordRequest, DeleteUserRequest, RequestPasswordResetRequest, ResetPasswordRequest,
-    SignInEmailRequest, SignUpEmailRequest, UpdateUserRequest,
+    AdminBanUserRequest, AdminCreateUserRequest, AdminListUsersQuery, AdminSetRoleRequest,
+    AdminSetUserPasswordRequest, ChangePasswordRequest, DeleteUserRequest,
+    RequestPasswordResetRequest, ResetPasswordRequest, RoleValue, SignInEmailRequest,
+    SignUpEmailRequest, UpdateUserRequest,
 };
 
 fn create_test_service() -> (AuthService, Arc<MockEmailSender>) {
@@ -53,6 +55,7 @@ async fn test_sign_up_and_sign_in_flow() {
     assert!(signup_res.token.is_some());
     assert_eq!(signup_res.user.email, "alice@example.com");
     assert_eq!(signup_res.user.name, "Alice Wonderland");
+    assert_eq!(signup_res.user.role.as_deref(), Some("user"));
 
     let signup_token = signup_res.token.unwrap();
 
@@ -560,6 +563,219 @@ async fn test_credential_account_with_distinct_account_id() {
         .await
         .expect("change_password should locate credential account by user_id");
     assert_eq!(changed.user.id, user.id);
+}
+
+#[tokio::test]
+async fn test_admin_plugin_rbac_ban_impersonation_and_lifecycle() {
+    let (service, _) = create_test_service();
+
+    // 1. Create an admin user and promote role to "admin"
+    let admin_signup = service
+        .sign_up_email(SignUpEmailRequest {
+            name: "Admin User".to_string(),
+            email: "admin@example.com".to_string(),
+            password: "adminpassword123".to_string(),
+            image: None,
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let admin_record = service
+        .adapter()
+        .update_user_admin(
+            &admin_signup.user.id,
+            AdminUpdateUserFields {
+                role: Some("admin".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let admin_wire = admin_record.to_wire();
+
+    // 2. Admin creates a regular user
+    let created = service
+        .admin_create_user(
+            &admin_wire,
+            AdminCreateUserRequest {
+                email: "member@example.com".to_string(),
+                password: Some("memberpassword123".to_string()),
+                name: "Member User".to_string(),
+                role: Some(RoleValue::Single("user".to_string())),
+                data: None,
+            },
+        )
+        .await
+        .expect("Admin should create user");
+    let member_wire = created.user;
+    assert_eq!(member_wire.role.as_deref(), Some("user"));
+
+    // 3. Regular user cannot call admin_set_role or admin_ban_user (403 Forbidden)
+    let forbidden_err = service
+        .admin_set_role(
+            &member_wire,
+            AdminSetRoleRequest {
+                user_id: admin_wire.id.clone(),
+                role: RoleValue::Single("user".to_string()),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(forbidden_err.http_status(), 403);
+    assert_eq!(
+        forbidden_err.error_code(),
+        "YOU_ARE_NOT_ALLOWED_TO_CHANGE_USERS_ROLE"
+    );
+
+    // 4. Admin cannot ban or remove themselves
+    let self_ban_err = service
+        .admin_ban_user(
+            &admin_wire,
+            AdminBanUserRequest {
+                user_id: admin_wire.id.clone(),
+                ban_reason: Some("Self ban".to_string()),
+                ban_expires_in: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(self_ban_err.error_code(), "YOU_CANNOT_BAN_YOURSELF");
+
+    let self_remove_err = service
+        .admin_remove_user(&admin_wire, &admin_wire.id)
+        .await
+        .unwrap_err();
+    assert_eq!(self_remove_err.error_code(), "YOU_CANNOT_REMOVE_YOURSELF");
+
+    // 5. Member signs in, then Admin bans member -> member's sessions are revoked and sign-in blocked
+    let member_signin = service
+        .sign_in_email(SignInEmailRequest {
+            email: "member@example.com".to_string(),
+            password: "memberpassword123".to_string(),
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let banned_res = service
+        .admin_ban_user(
+            &admin_wire,
+            AdminBanUserRequest {
+                user_id: member_wire.id.clone(),
+                ban_reason: Some("Policy violation".to_string()),
+                ban_expires_in: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(banned_res.user.banned, Some(true));
+    assert_eq!(
+        banned_res.user.ban_reason.as_deref(),
+        Some("Policy violation")
+    );
+
+    // Existing session is immediately revoked
+    assert!(service
+        .get_session(&member_signin.token)
+        .await
+        .unwrap()
+        .is_none());
+
+    // Banned user cannot sign in (403 BANNED_USER)
+    let banned_login_err = service
+        .sign_in_email(SignInEmailRequest {
+            email: "member@example.com".to_string(),
+            password: "memberpassword123".to_string(),
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(banned_login_err.error_code(), "BANNED_USER");
+    assert_eq!(banned_login_err.http_status(), 403);
+
+    // 6. Unban user -> sign-in succeeds again
+    let unbanned = service
+        .admin_unban_user(&admin_wire, &member_wire.id)
+        .await
+        .unwrap();
+    assert_eq!(unbanned.user.banned, Some(false));
+    assert!(unbanned.user.ban_reason.is_none());
+
+    let member_relogin = service
+        .sign_in_email(SignInEmailRequest {
+            email: "member@example.com".to_string(),
+            password: "memberpassword123".to_string(),
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .expect("Unbanned user should sign in");
+
+    // 7. Admin impersonates member -> impersonated session is hidden from member's /list-sessions
+    let imp_res = service
+        .admin_impersonate_user(&admin_wire, &member_wire.id, RequestMeta::default())
+        .await
+        .expect("Admin impersonation should succeed");
+    assert_eq!(imp_res.user.id, member_wire.id);
+    assert_eq!(
+        imp_res.session.impersonated_by.as_deref(),
+        Some(admin_wire.id.as_str())
+    );
+
+    // Standard list_sessions hides impersonated sessions, while admin_list_user_sessions includes them
+    let visible_sessions = service.list_sessions(&member_wire.id).await.unwrap();
+    assert_eq!(visible_sessions.len(), 1);
+    assert_eq!(visible_sessions[0].token, member_relogin.token);
+
+    let all_member_sessions = service
+        .admin_list_user_sessions(&admin_wire, &member_wire.id)
+        .await
+        .unwrap();
+    assert_eq!(all_member_sessions.sessions.len(), 2);
+
+    // Stop impersonating restores admin session and deletes impersonated session
+    let stopped = service
+        .admin_stop_impersonating(
+            &imp_res.session,
+            admin_signup.token.as_deref(),
+        )
+        .await
+        .expect("stop_impersonating should restore admin session");
+    assert_eq!(stopped.user.id, admin_wire.id);
+    assert!(service
+        .get_session(&imp_res.session.token)
+        .await
+        .unwrap()
+        .is_none());
+
+    // 8. Admin sets user password and lists users with search
+    service
+        .admin_set_user_password(
+            &admin_wire,
+            AdminSetUserPasswordRequest {
+                user_id: member_wire.id.clone(),
+                new_password: "admin-reset-password-99".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let list_res = service
+        .admin_list_users(
+            &admin_wire,
+            AdminListUsersQuery {
+                search_value: Some("member@".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_res.total, 1);
+    assert_eq!(list_res.users[0].email, "member@example.com");
 }
 
 #[test]

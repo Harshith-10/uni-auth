@@ -1,7 +1,7 @@
 //! Reactive authentication store with observable state transitions for desktop UI integration.
 
 use std::sync::{Arc, Mutex, RwLock};
-use auth_proto::{SessionWire, UserWire};
+use auth_proto::{SessionAndUserResponse, SessionWire, UserWire};
 
 use crate::client::{BetterAuthNativeClient, ClientError};
 
@@ -130,6 +130,7 @@ impl AuthStore {
                     user_agent: None,
                     created_at: time::OffsetDateTime::now_utc(),
                     updated_at: time::OffsetDateTime::now_utc(),
+                    impersonated_by: None,
                 },
             });
         }
@@ -162,6 +163,29 @@ impl AuthStore {
 
         self.set_status(AuthStatus::Unauthenticated);
         Ok(())
+    }
+
+    /// Impersonates a target user and transitions `AuthStore` to the impersonated session.
+    pub async fn impersonate_user(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<SessionAndUserResponse, ClientError> {
+        let res = self.client.admin_impersonate_user(user_id).await?;
+        self.set_status(AuthStatus::Authenticated {
+            user: res.user.clone(),
+            session: res.session.clone(),
+        });
+        Ok(res)
+    }
+
+    /// Stops impersonating and restores `AuthStore` to the original admin session.
+    pub async fn stop_impersonating(&self) -> Result<SessionAndUserResponse, ClientError> {
+        let res = self.client.admin_stop_impersonating().await?;
+        self.set_status(AuthStatus::Authenticated {
+            user: res.user.clone(),
+            session: res.session.clone(),
+        });
+        Ok(res)
     }
 
     /// Signs out and sets the reactive status to `Unauthenticated`.

@@ -1,25 +1,32 @@
 //! Core authentication service coordinating business logic, crypto, hooks, plugins, and persistence.
 
 use std::sync::Arc;
+use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
 use auth_proto::{
-    AccountListEntryWire, ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest,
-    OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest,
+    error_codes, AccountListEntryWire, AdminBanUserRequest, AdminCreateUserRequest,
+    AdminHasPermissionRequest, AdminListUserSessionsResponse, AdminListUsersQuery,
+    AdminListUsersResponse, AdminPermissionResponse, AdminSetRoleRequest,
+    AdminSetUserPasswordRequest, AdminSuccessResponse, AdminUpdateUserRequest, AdminUserResponse,
+    ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest,
+    OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest, RoleValue,
     SendVerificationEmailRequest, SessionAndUserResponse, SessionWire, SignInEmailRequest,
     SignInResponse, SignOutRequest, SignOutResponse, SignUpEmailRequest, SignUpResponse,
     StatusMessageResponse, StatusResponse, UpdateUserRequest, UpdateUserResponse, UserWire,
     VerifyEmailResponse,
 };
 
+use crate::access::AdminConfig;
 use crate::adapter::AuthAdapter;
 use crate::crypto;
 use crate::email::{EmailSender, NoopEmailSender};
 use crate::error::{AdapterError, AuthError};
 use crate::hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter};
 use crate::models::{
-    AccountRecord, CreateAccountInput, CreateSessionInput, CreateUserInput,
-    CreateVerificationInput, RequestMeta, SessionRecord, UserRecord,
+    AccountRecord, AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput,
+    CreateSessionInput, CreateUserInput, CreateVerificationInput, RequestMeta, SessionRecord,
+    UserRecord,
 };
 use crate::plugin::AuthPlugin;
 
@@ -78,6 +85,7 @@ impl Default for AuthConfig {
 #[derive(Clone)]
 pub struct AuthService {
     config: AuthConfig,
+    admin_config: AdminConfig,
     adapter: Arc<dyn AuthAdapter>,
     email_sender: Arc<dyn EmailSender>,
     hooks: Arc<dyn AuthHooks>,
@@ -92,6 +100,7 @@ impl AuthService {
     pub fn new(config: AuthConfig, adapter: Arc<dyn AuthAdapter>) -> Self {
         Self {
             config,
+            admin_config: AdminConfig::default(),
             adapter,
             email_sender: Arc::new(NoopEmailSender),
             hooks: Arc::new(NoopAuthHooks),
@@ -101,6 +110,15 @@ impl AuthService {
             session_update_age: Duration::hours(24),
             session_fresh_age: Duration::hours(24),
         }
+    }
+
+    pub fn with_admin_config(mut self, admin_config: AdminConfig) -> Self {
+        self.admin_config = admin_config;
+        self
+    }
+
+    pub fn admin_config(&self) -> &AdminConfig {
+        &self.admin_config
     }
 
     pub fn with_email_sender(mut self, email_sender: Arc<dyn EmailSender>) -> Self {
@@ -201,13 +219,45 @@ impl AuthService {
         self.hooks.on_user_created(user).await;
     }
 
-    /// Issues a session for `user` while executing registered `AuthPlugin` and `AuthHooks` callbacks.
+    /// Enforces the Admin plugin banned-user check before creating a session.
+    /// Automatically clears expired bans (`ban_expires < now`).
+    ///
+    /// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/admin.ts` lines 81-112
+    async fn enforce_not_banned(&self, user: &UserRecord) -> Result<(), AuthError> {
+        if user.banned {
+            if let Some(exp) = user.ban_expires {
+                if exp < OffsetDateTime::now_utc() {
+                    let _ = self
+                        .adapter
+                        .update_user_admin(
+                            &user.id,
+                            AdminUpdateUserFields {
+                                banned: Some(false),
+                                ban_reason: Some(None),
+                                ban_expires: Some(None),
+                                ..Default::default()
+                            },
+                        )
+                        .await;
+                    return Ok(());
+                }
+            }
+            return Err(AuthError::BannedUser(
+                self.admin_config.banned_user_message.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Issues a session for `user` while executing banned-user checks, `AuthPlugin`, and `AuthHooks` callbacks.
     pub async fn issue_session_for_user(
         &self,
         user: &UserRecord,
         meta: RequestMeta,
         run_before_sign_in: bool,
     ) -> Result<SessionRecord, AuthError> {
+        self.enforce_not_banned(user).await?;
+
         let user_wire = user.to_wire();
         if run_before_sign_in {
             for plugin in self.plugins.iter() {
@@ -455,11 +505,18 @@ impl AuthService {
 
         let session = self.issue_session_for_user(&user, meta, true).await?;
 
+        // Re-read user in case an expired ban was auto-cleared during issue_session_for_user
+        let fresh_user = self
+            .adapter
+            .find_user_by_id(&user.id)
+            .await?
+            .unwrap_or(user);
+
         Ok(SignInResponse {
             redirect: req.callback_url.is_some(),
             token: session.token,
             url: req.callback_url,
-            user: user.to_wire(),
+            user: fresh_user.to_wire(),
         })
     }
 
@@ -540,10 +597,17 @@ impl AuthService {
         })
     }
 
-    /// Lists active sessions for a user.
+    /// Lists active non-impersonated sessions for a user.
+    ///
+    /// Per upstream `plugins/admin/admin.ts` lines 116-129, sessions with `impersonatedBy`
+    /// are excluded from standard `/list-sessions` responses.
     pub async fn list_sessions(&self, user_id: &str) -> Result<Vec<SessionWire>, AuthError> {
         let records = self.adapter.list_sessions_by_user_id(user_id).await?;
-        Ok(records.into_iter().map(|s| s.to_wire()).collect())
+        Ok(records
+            .into_iter()
+            .filter(|s| s.impersonated_by.is_none())
+            .map(|s| s.to_wire())
+            .collect())
     }
 
     /// Revokes a specific session belonging to the user. Accepts either session token or session ID.
@@ -1072,6 +1136,842 @@ impl AuthService {
             .delete_account(&target.provider_id, &target.account_id)
             .await?;
         Ok(StatusResponse::success())
+    }
+
+    // ──────────────────────────────────────────────
+    // Admin Plugin Operations
+    // ──────────────────────────────────────────────
+
+    fn check_admin_permission(
+        &self,
+        actor: &UserWire,
+        resource: &str,
+        action: &str,
+        err_code: &'static str,
+        err_msg: &'static str,
+    ) -> Result<(), AuthError> {
+        if !self.admin_config.has_permission(
+            Some(&actor.id),
+            actor.role.as_deref(),
+            resource,
+            action,
+        ) {
+            return Err(AuthError::forbidden(err_code, err_msg));
+        }
+        Ok(())
+    }
+
+    fn validate_role_names(&self, roles: &[String]) -> Result<(), AuthError> {
+        if roles.is_empty() {
+            return Err(AuthError::bad_request(
+                error_codes::INVALID_ROLE_TYPE,
+                "Invalid role type",
+            ));
+        }
+        for role in roles {
+            if !self.admin_config.ac.has_role(role) {
+                return Err(AuthError::bad_request(
+                    error_codes::YOU_ARE_NOT_ALLOWED_TO_SET_NON_EXISTENT_VALUE,
+                    "You are not allowed to set a non-existent role value",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `POST /api/auth/admin/set-role`
+    pub async fn admin_set_role(
+        &self,
+        actor: &UserWire,
+        req: AdminSetRoleRequest,
+    ) -> Result<AdminUserResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "set-role",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_CHANGE_USERS_ROLE,
+            "You are not allowed to change users role",
+        )?;
+
+        let role_list = req.role.to_vec();
+        self.validate_role_names(&role_list)?;
+
+        let updated = self
+            .adapter
+            .update_user_admin(
+                &req.user_id,
+                AdminUpdateUserFields {
+                    role: Some(req.role.to_csv()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| match e {
+                AdapterError::NotFound => AuthError::UserNotFound,
+                other => AuthError::Adapter(other),
+            })?;
+
+        Ok(AdminUserResponse {
+            user: updated.to_wire(),
+        })
+    }
+
+    /// `GET /api/auth/admin/get-user`
+    pub async fn admin_get_user(
+        &self,
+        actor: &UserWire,
+        target_user_id: &str,
+    ) -> Result<UserWire, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "get",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_GET_USER,
+            "You are not allowed to get user",
+        )?;
+
+        let user = self
+            .adapter
+            .find_user_by_id(target_user_id)
+            .await?
+            .ok_or(AuthError::UserNotFound)?;
+
+        Ok(user.to_wire())
+    }
+
+    /// `POST /api/auth/admin/create-user`
+    pub async fn admin_create_user(
+        &self,
+        actor: &UserWire,
+        req: AdminCreateUserRequest,
+    ) -> Result<AdminUserResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "create",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_CREATE_USERS,
+            "You are not allowed to create users",
+        )?;
+
+        let data_map = req.data.unwrap_or_default();
+
+        // Extract role from top-level `role` or `data.role`
+        let requested_role: Option<RoleValue> = if req.role.is_some() {
+            req.role
+        } else if let Some(val) = data_map.get("role") {
+            match serde_json::from_value::<RoleValue>(val.clone()) {
+                Ok(rv) => Some(rv),
+                Err(_) => {
+                    return Err(AuthError::bad_request(
+                        error_codes::INVALID_ROLE_TYPE,
+                        "Invalid role type",
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(ref rv) = requested_role {
+            self.check_admin_permission(
+                actor,
+                "user",
+                "set-role",
+                error_codes::YOU_ARE_NOT_ALLOWED_TO_CHANGE_USERS_ROLE,
+                "You are not allowed to change users role",
+            )?;
+            let role_list = rv.to_vec();
+            self.validate_role_names(&role_list)?;
+        }
+
+        if ["banned", "banReason", "banExpires"]
+            .iter()
+            .any(|k| data_map.contains_key(*k))
+        {
+            self.check_admin_permission(
+                actor,
+                "user",
+                "ban",
+                error_codes::YOU_ARE_NOT_ALLOWED_TO_BAN_USERS,
+                "You are not allowed to ban users",
+            )?;
+        }
+
+        let email = req.email.trim().to_lowercase();
+        if !email.contains('@') || !email.contains('.') {
+            return Err(AuthError::InvalidEmail);
+        }
+
+        if let Some(ref pw) = req.password {
+            if pw.len() > self.config.max_password_length {
+                return Err(AuthError::PasswordTooLong);
+            }
+        }
+
+        if self.adapter.find_user_by_email(&email).await?.is_some() {
+            return Err(AuthError::bad_request(
+                error_codes::USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL,
+                "User already exists. Use another email.",
+            ));
+        }
+
+        let hashed_password = match req.password {
+            Some(pw) => Some(crypto::hash_password(pw).await.map_err(AuthError::Crypto)?),
+            None => None,
+        };
+
+        let image = data_map
+            .get("image")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let email_verified = data_map
+            .get("emailVerified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let created = self
+            .adapter
+            .create_user(CreateUserInput {
+                id: None,
+                name: req.name,
+                email: email.clone(),
+                image,
+                email_verified,
+            })
+            .await?;
+
+        let final_role = requested_role
+            .map(|r| r.to_csv())
+            .unwrap_or_else(|| self.admin_config.default_role.clone());
+
+        let banned = data_map.get("banned").and_then(|v| v.as_bool());
+        let ban_reason = data_map
+            .get("banReason")
+            .map(|v| v.as_str().map(String::from));
+        let ban_expires = data_map.get("banExpires").and_then(|v| {
+            v.as_str()
+                .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+                .map(Some)
+        });
+
+        let updated = self
+            .adapter
+            .update_user_admin(
+                &created.id,
+                AdminUpdateUserFields {
+                    role: Some(final_role),
+                    banned,
+                    ban_reason,
+                    ban_expires,
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        if let Some(pw_hash) = hashed_password {
+            self.adapter
+                .create_account(CreateAccountInput {
+                    id: None,
+                    user_id: updated.id.clone(),
+                    account_id: updated.id.clone(),
+                    provider_id: "credential".to_string(),
+                    password: Some(pw_hash),
+                    access_token: None,
+                    refresh_token: None,
+                    id_token: None,
+                    access_token_expires_at: None,
+                    refresh_token_expires_at: None,
+                    scope: None,
+                })
+                .await?;
+        }
+
+        let wire = updated.to_wire();
+        self.notify_user_created(&wire).await;
+
+        Ok(AdminUserResponse { user: wire })
+    }
+
+    /// `POST /api/auth/admin/update-user`
+    pub async fn admin_update_user(
+        &self,
+        actor: &UserWire,
+        req: AdminUpdateUserRequest,
+    ) -> Result<UserWire, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "update",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_UPDATE_USERS,
+            "You are not allowed to update users",
+        )?;
+
+        if req.data.is_empty() {
+            return Err(AuthError::bad_request(
+                error_codes::NO_DATA_TO_UPDATE,
+                "No data to update",
+            ));
+        }
+
+        if req.data.contains_key("password") {
+            return Err(AuthError::bad_request(
+                error_codes::PASSWORD_CANNOT_BE_UPDATED_VIA_UPDATE_USER,
+                "Password cannot be updated through update-user. Use the set-user-password endpoint instead",
+            ));
+        }
+
+        if req.data.contains_key("id") {
+            return Err(AuthError::bad_request(
+                error_codes::USER_ID_CANNOT_BE_UPDATED,
+                "User id cannot be updated",
+            ));
+        }
+
+        let mut fields = AdminUpdateUserFields::default();
+
+        if let Some(role_val) = req.data.get("role") {
+            self.check_admin_permission(
+                actor,
+                "user",
+                "set-role",
+                error_codes::YOU_ARE_NOT_ALLOWED_TO_CHANGE_USERS_ROLE,
+                "You are not allowed to change users role",
+            )?;
+            let rv: RoleValue = serde_json::from_value(role_val.clone()).map_err(|_| {
+                AuthError::bad_request(error_codes::INVALID_ROLE_TYPE, "Invalid role type")
+            })?;
+            let role_list = rv.to_vec();
+            self.validate_role_names(&role_list)?;
+            fields.role = Some(rv.to_csv());
+        }
+
+        if ["banned", "banReason", "banExpires"]
+            .iter()
+            .any(|k| req.data.contains_key(*k))
+        {
+            self.check_admin_permission(
+                actor,
+                "user",
+                "ban",
+                error_codes::YOU_ARE_NOT_ALLOWED_TO_BAN_USERS,
+                "You are not allowed to ban users",
+            )?;
+            if let Some(b) = req.data.get("banned").and_then(|v| v.as_bool()) {
+                if b && req.user_id == actor.id {
+                    return Err(AuthError::bad_request(
+                        error_codes::YOU_CANNOT_BAN_YOURSELF,
+                        "You cannot ban yourself",
+                    ));
+                }
+                fields.banned = Some(b);
+            }
+            if let Some(reason_val) = req.data.get("banReason") {
+                fields.ban_reason = Some(reason_val.as_str().map(String::from));
+            }
+            if let Some(exp_val) = req.data.get("banExpires") {
+                if exp_val.is_null() {
+                    fields.ban_expires = Some(None);
+                } else if let Some(s) = exp_val.as_str() {
+                    if let Ok(dt) = OffsetDateTime::parse(s, &Rfc3339) {
+                        fields.ban_expires = Some(Some(dt));
+                    }
+                }
+            }
+        }
+
+        if req.data.contains_key("email") || req.data.contains_key("emailVerified") {
+            self.check_admin_permission(
+                actor,
+                "user",
+                "set-email",
+                error_codes::YOU_ARE_NOT_ALLOWED_TO_SET_USERS_EMAIL,
+                "You are not allowed to update users email",
+            )?;
+            if let Some(email_val) = req.data.get("email").and_then(|v| v.as_str()) {
+                let normalized = email_val.trim().to_lowercase();
+                if !normalized.contains('@') || !normalized.contains('.') {
+                    return Err(AuthError::InvalidEmail);
+                }
+                if let Some(existing) = self.adapter.find_user_by_email(&normalized).await? {
+                    if existing.id != req.user_id {
+                        return Err(AuthError::bad_request(
+                            error_codes::USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL,
+                            "User already exists. Use another email.",
+                        ));
+                    }
+                }
+                fields.email = Some(normalized);
+            }
+            if let Some(ev) = req.data.get("emailVerified").and_then(|v| v.as_bool()) {
+                fields.email_verified = Some(ev);
+            }
+        }
+
+        if req.data.contains_key("phoneNumber") || req.data.contains_key("phoneNumberVerified") {
+            self.check_admin_permission(
+                actor,
+                "user",
+                "set-phone",
+                error_codes::YOU_ARE_NOT_ALLOWED_TO_SET_USERS_PHONE_NUMBER,
+                "You are not allowed to update users phone number",
+            )?;
+        }
+
+        if let Some(name) = req.data.get("name").and_then(|v| v.as_str()) {
+            fields.name = Some(name.to_string());
+        }
+        if let Some(img_val) = req.data.get("image") {
+            fields.image = Some(img_val.as_str().filter(|s| !s.is_empty()).map(String::from));
+        }
+
+        let updated = self
+            .adapter
+            .update_user_admin(&req.user_id, fields.clone())
+            .await
+            .map_err(|e| match e {
+                AdapterError::NotFound => AuthError::UserNotFound,
+                other => AuthError::Adapter(other),
+            })?;
+
+        if fields.banned == Some(true) {
+            self.adapter.delete_sessions_by_user_id(&req.user_id).await?;
+        }
+
+        Ok(updated.to_wire())
+    }
+
+    /// `GET /api/auth/admin/list-users`
+    pub async fn admin_list_users(
+        &self,
+        actor: &UserWire,
+        query: AdminListUsersQuery,
+    ) -> Result<AdminListUsersResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "list",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_LIST_USERS,
+            "You are not allowed to list users",
+        )?;
+
+        let filter = AdminListUsersFilter {
+            search_value: query.search_value,
+            search_field: query.search_field,
+            search_operator: query.search_operator,
+            filter_field: query.filter_field,
+            filter_value: query.filter_value,
+            filter_operator: query.filter_operator,
+            sort_by: query.sort_by,
+            sort_direction: query.sort_direction,
+            limit: query.limit,
+            offset: query.offset,
+        };
+
+        let (records, total) = self.adapter.list_users(filter).await?;
+        let users = records.into_iter().map(|u| u.to_wire()).collect();
+
+        Ok(AdminListUsersResponse {
+            users,
+            total,
+            limit: query.limit,
+            offset: query.offset,
+        })
+    }
+
+    /// `POST /api/auth/admin/list-user-sessions`
+    pub async fn admin_list_user_sessions(
+        &self,
+        actor: &UserWire,
+        target_user_id: &str,
+    ) -> Result<AdminListUserSessionsResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "session",
+            "list",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_LIST_USERS_SESSIONS,
+            "You are not allowed to list users sessions",
+        )?;
+
+        let records = self.adapter.list_sessions_by_user_id(target_user_id).await?;
+        Ok(AdminListUserSessionsResponse {
+            sessions: records.into_iter().map(|s| s.to_wire()).collect(),
+        })
+    }
+
+    /// `POST /api/auth/admin/ban-user`
+    pub async fn admin_ban_user(
+        &self,
+        actor: &UserWire,
+        req: AdminBanUserRequest,
+    ) -> Result<AdminUserResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "ban",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_BAN_USERS,
+            "You are not allowed to ban users",
+        )?;
+
+        if self.adapter.find_user_by_id(&req.user_id).await?.is_none() {
+            return Err(AuthError::UserNotFound);
+        }
+
+        if req.user_id == actor.id {
+            return Err(AuthError::bad_request(
+                error_codes::YOU_CANNOT_BAN_YOURSELF,
+                "You cannot ban yourself",
+            ));
+        }
+
+        let reason = req
+            .ban_reason
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| self.admin_config.default_ban_reason.clone());
+
+        let expires = req
+            .ban_expires_in
+            .or(self.admin_config.default_ban_expires_in)
+            .map(|secs| OffsetDateTime::now_utc() + Duration::seconds(secs));
+
+        let updated = self
+            .adapter
+            .update_user_admin(
+                &req.user_id,
+                AdminUpdateUserFields {
+                    banned: Some(true),
+                    ban_reason: Some(Some(reason)),
+                    ban_expires: Some(expires),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        self.adapter.delete_sessions_by_user_id(&req.user_id).await?;
+
+        Ok(AdminUserResponse {
+            user: updated.to_wire(),
+        })
+    }
+
+    /// `POST /api/auth/admin/unban-user`
+    pub async fn admin_unban_user(
+        &self,
+        actor: &UserWire,
+        target_user_id: &str,
+    ) -> Result<AdminUserResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "ban",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_BAN_USERS,
+            "You are not allowed to ban users",
+        )?;
+
+        let updated = self
+            .adapter
+            .update_user_admin(
+                target_user_id,
+                AdminUpdateUserFields {
+                    banned: Some(false),
+                    ban_reason: Some(None),
+                    ban_expires: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| match e {
+                AdapterError::NotFound => AuthError::UserNotFound,
+                other => AuthError::Adapter(other),
+            })?;
+
+        Ok(AdminUserResponse {
+            user: updated.to_wire(),
+        })
+    }
+
+    /// `POST /api/auth/admin/impersonate-user`
+    pub async fn admin_impersonate_user(
+        &self,
+        actor: &UserWire,
+        target_user_id: &str,
+        meta: RequestMeta,
+    ) -> Result<SessionAndUserResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "impersonate",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_IMPERSONATE_USERS,
+            "You are not allowed to impersonate users",
+        )?;
+
+        let target = self
+            .adapter
+            .find_user_by_id(target_user_id)
+            .await?
+            .ok_or(AuthError::UserNotFound)?;
+
+        if self
+            .admin_config
+            .is_admin_user(&target.id, target.role.as_deref())
+        {
+            let can_impersonate_admins = self.admin_config.allow_impersonating_admins
+                || self.admin_config.has_permission(
+                    Some(&actor.id),
+                    actor.role.as_deref(),
+                    "user",
+                    "impersonate-admins",
+                );
+            if !can_impersonate_admins {
+                return Err(AuthError::forbidden(
+                    error_codes::YOU_CANNOT_IMPERSONATE_ADMINS,
+                    "You cannot impersonate admins",
+                ));
+            }
+        }
+
+        let raw_token = crypto::generate_session_token();
+        let expires_at =
+            OffsetDateTime::now_utc() + self.admin_config.impersonation_session_duration;
+
+        let session = self
+            .adapter
+            .create_impersonated_session(
+                CreateSessionInput {
+                    id: None,
+                    user_id: target.id.clone(),
+                    token: raw_token,
+                    expires_at,
+                    ip_address: meta.ip_address,
+                    user_agent: meta.user_agent,
+                },
+                actor.id.clone(),
+            )
+            .await?;
+
+        Ok(SessionAndUserResponse {
+            session: session.to_wire(),
+            user: target.to_wire(),
+        })
+    }
+
+    /// `POST /api/auth/admin/stop-impersonating`
+    pub async fn admin_stop_impersonating(
+        &self,
+        current_session: &SessionWire,
+        admin_token_or_signed: Option<&str>,
+    ) -> Result<SessionAndUserResponse, AuthError> {
+        let admin_user_id = current_session.impersonated_by.as_ref().ok_or_else(|| {
+            AuthError::bad_request("NOT_IMPERSONATING", "You are not impersonating anyone")
+        })?;
+
+        let admin_user = self
+            .adapter
+            .find_user_by_id(admin_user_id)
+            .await?
+            .ok_or_else(|| AuthError::Internal("Failed to find admin user".to_string()))?;
+
+        // Resolve the admin's original session via cookie/header token or fallback to active admin session
+        let admin_session = if let Some(tok_str) = admin_token_or_signed {
+            let clean = tok_str.split(':').next().unwrap_or(tok_str);
+            let raw = self
+                .verify_token(clean)
+                .unwrap_or_else(|| clean.to_string());
+            match self.adapter.find_session_by_token(&raw).await? {
+                Some(s) if s.user_id == admin_user.id && !s.is_expired() => s,
+                _ => {
+                    return Err(AuthError::Internal(
+                        "Failed to find admin session".to_string(),
+                    ))
+                }
+            }
+        } else {
+            let sessions = self.adapter.list_sessions_by_user_id(&admin_user.id).await?;
+            sessions
+                .into_iter()
+                .find(|s| s.impersonated_by.is_none() && !s.is_expired())
+                .ok_or_else(|| AuthError::Internal("Failed to find admin session".to_string()))?
+        };
+
+        self.adapter.delete_session(&current_session.token).await?;
+
+        Ok(SessionAndUserResponse {
+            session: admin_session.to_wire(),
+            user: admin_user.to_wire(),
+        })
+    }
+
+    /// `POST /api/auth/admin/revoke-user-session`
+    pub async fn admin_revoke_user_session(
+        &self,
+        actor: &UserWire,
+        session_token_or_signed: &str,
+    ) -> Result<AdminSuccessResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "session",
+            "revoke",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_REVOKE_USERS_SESSIONS,
+            "You are not allowed to revoke users sessions",
+        )?;
+
+        let raw_token = self
+            .verify_token(session_token_or_signed)
+            .unwrap_or_else(|| session_token_or_signed.to_string());
+
+        self.adapter.delete_session(&raw_token).await?;
+        Ok(AdminSuccessResponse::ok())
+    }
+
+    /// `POST /api/auth/admin/revoke-user-sessions`
+    pub async fn admin_revoke_user_sessions(
+        &self,
+        actor: &UserWire,
+        target_user_id: &str,
+    ) -> Result<AdminSuccessResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "session",
+            "revoke",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_REVOKE_USERS_SESSIONS,
+            "You are not allowed to revoke users sessions",
+        )?;
+
+        self.adapter.delete_sessions_by_user_id(target_user_id).await?;
+        Ok(AdminSuccessResponse::ok())
+    }
+
+    /// `POST /api/auth/admin/remove-user`
+    pub async fn admin_remove_user(
+        &self,
+        actor: &UserWire,
+        target_user_id: &str,
+    ) -> Result<AdminSuccessResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "delete",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS,
+            "You are not allowed to delete users",
+        )?;
+
+        if target_user_id == actor.id {
+            return Err(AuthError::bad_request(
+                error_codes::YOU_CANNOT_REMOVE_YOURSELF,
+                "You cannot remove yourself",
+            ));
+        }
+
+        if self.adapter.find_user_by_id(target_user_id).await?.is_none() {
+            return Err(AuthError::UserNotFound);
+        }
+
+        self.adapter.delete_sessions_by_user_id(target_user_id).await?;
+        self.adapter.delete_user(target_user_id).await?;
+        self.hooks.on_user_deleted(target_user_id).await;
+
+        Ok(AdminSuccessResponse::ok())
+    }
+
+    /// `POST /api/auth/admin/set-user-password`
+    pub async fn admin_set_user_password(
+        &self,
+        actor: &UserWire,
+        req: AdminSetUserPasswordRequest,
+    ) -> Result<StatusResponse, AuthError> {
+        self.check_admin_permission(
+            actor,
+            "user",
+            "set-password",
+            error_codes::YOU_ARE_NOT_ALLOWED_TO_SET_USERS_PASSWORD,
+            "You are not allowed to set users password",
+        )?;
+
+        if req.new_password.len() < self.config.min_password_length {
+            return Err(AuthError::PasswordTooShort);
+        }
+        if req.new_password.len() > self.config.max_password_length {
+            return Err(AuthError::PasswordTooLong);
+        }
+
+        let user = self
+            .adapter
+            .find_user_by_id(&req.user_id)
+            .await?
+            .ok_or(AuthError::UserNotFound)?;
+
+        let password_hash = crypto::hash_password(req.new_password)
+            .await
+            .map_err(AuthError::Crypto)?;
+
+        if self.find_credential_account(&user.id).await?.is_some() {
+            self.adapter
+                .update_account_password(&user.id, &password_hash)
+                .await?;
+        } else {
+            self.adapter
+                .create_account(CreateAccountInput {
+                    id: None,
+                    user_id: user.id.clone(),
+                    account_id: user.id,
+                    provider_id: "credential".to_string(),
+                    password: Some(password_hash),
+                    access_token: None,
+                    refresh_token: None,
+                    id_token: None,
+                    access_token_expires_at: None,
+                    refresh_token_expires_at: None,
+                    scope: None,
+                })
+                .await?;
+        }
+
+        Ok(StatusResponse::success())
+    }
+
+    /// `POST /api/auth/admin/has-permission`
+    pub async fn admin_has_permission(
+        &self,
+        actor: Option<&UserWire>,
+        req: AdminHasPermissionRequest,
+    ) -> Result<AdminPermissionResponse, AuthError> {
+        let perms = req
+            .permissions
+            .or(req.permission)
+            .ok_or_else(|| {
+                AuthError::bad_request(
+                    "INVALID_PERMISSION_CHECK",
+                    "invalid permission check. no permission(s) were passed.",
+                )
+            })?;
+
+        let (resolved_user_id, resolved_role) = if let Some(role) = req.role {
+            (req.user_id, Some(role))
+        } else if let Some(uid) = req.user_id {
+            let user = self
+                .adapter
+                .find_user_by_id(&uid)
+                .await?
+                .ok_or_else(|| AuthError::bad_request(error_codes::USER_NOT_FOUND, "user not found"))?;
+            (Some(user.id), user.role)
+        } else if let Some(act) = actor {
+            (Some(act.id.clone()), act.role.clone())
+        } else {
+            return Err(AuthError::bad_request(
+                "USER_ID_OR_ROLE_REQUIRED",
+                "user id or role is required",
+            ));
+        };
+
+        let success = self.admin_config.has_permission_map(
+            resolved_user_id.as_deref(),
+            resolved_role.as_deref(),
+            &perms,
+        );
+
+        Ok(AdminPermissionResponse {
+            error: None,
+            success,
+        })
     }
 }
 

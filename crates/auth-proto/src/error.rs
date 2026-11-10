@@ -1,7 +1,8 @@
 //! Better Auth error codes and JSON error response envelope.
 //!
-//! Matches the upstream definitions in `@better-auth/core/error`:
+//! Matches the upstream definitions in `@better-auth/core/error` and `plugins/admin/error-codes.ts`:
 //! - `.reference/better-auth/packages/core/src/error/codes.ts`
+//! - `.reference/better-auth/packages/better-auth/src/plugins/admin/error-codes.ts`
 
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +42,8 @@ impl AuthErrorResponse {
 
 /// Standard Better Auth error code constants.
 ///
-/// Direct parity with `BASE_ERROR_CODES` in `.reference/better-auth/packages/core/src/error/codes.ts`.
+/// Direct parity with `BASE_ERROR_CODES` in `.reference/better-auth/packages/core/src/error/codes.ts`
+/// and `ADMIN_ERROR_CODES` in `.reference/better-auth/packages/better-auth/src/plugins/admin/error-codes.ts`.
 pub mod error_codes {
     pub const USER_NOT_FOUND: &str = "USER_NOT_FOUND";
     pub const FAILED_TO_CREATE_USER: &str = "FAILED_TO_CREATE_USER";
@@ -80,4 +82,40 @@ pub mod error_codes {
     pub const EMAIL_PASSWORD_DISABLED: &str = "EMAIL_PASSWORD_DISABLED";
     pub const EMAIL_PASSWORD_SIGN_UP_DISABLED: &str = "EMAIL_PASSWORD_SIGN_UP_DISABLED";
     pub const RESET_PASSWORD_DISABLED: &str = "RESET_PASSWORD_DISABLED";
+
+    // ── Admin Plugin Error Codes ──
+    pub const YOU_CANNOT_BAN_YOURSELF: &str = "YOU_CANNOT_BAN_YOURSELF";
+    pub const YOU_ARE_NOT_ALLOWED_TO_CHANGE_USERS_ROLE: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_CHANGE_USERS_ROLE";
+    pub const YOU_ARE_NOT_ALLOWED_TO_CREATE_USERS: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_CREATE_USERS";
+    pub const YOU_ARE_NOT_ALLOWED_TO_LIST_USERS: &str = "YOU_ARE_NOT_ALLOWED_TO_LIST_USERS";
+    pub const YOU_ARE_NOT_ALLOWED_TO_LIST_USERS_SESSIONS: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_LIST_USERS_SESSIONS";
+    pub const YOU_ARE_NOT_ALLOWED_TO_BAN_USERS: &str = "YOU_ARE_NOT_ALLOWED_TO_BAN_USERS";
+    pub const YOU_ARE_NOT_ALLOWED_TO_IMPERSONATE_USERS: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_IMPERSONATE_USERS";
+    pub const YOU_ARE_NOT_ALLOWED_TO_REVOKE_USERS_SESSIONS: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_REVOKE_USERS_SESSIONS";
+    pub const YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS";
+    pub const YOU_ARE_NOT_ALLOWED_TO_SET_USERS_PASSWORD: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_SET_USERS_PASSWORD";
+    pub const BANNED_USER: &str = "BANNED_USER";
+    pub const YOU_ARE_NOT_ALLOWED_TO_GET_USER: &str = "YOU_ARE_NOT_ALLOWED_TO_GET_USER";
+    pub const NO_DATA_TO_UPDATE: &str = "NO_DATA_TO_UPDATE";
+    pub const YOU_ARE_NOT_ALLOWED_TO_UPDATE_USERS: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_UPDATE_USERS";
+    pub const YOU_CANNOT_REMOVE_YOURSELF: &str = "YOU_CANNOT_REMOVE_YOURSELF";
+    pub const YOU_ARE_NOT_ALLOWED_TO_SET_NON_EXISTENT_VALUE: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_SET_NON_EXISTENT_VALUE";
+    pub const YOU_CANNOT_IMPERSONATE_ADMINS: &str = "YOU_CANNOT_IMPERSONATE_ADMINS";
+    pub const INVALID_ROLE_TYPE: &str = "INVALID_ROLE_TYPE";
+    pub const YOU_ARE_NOT_ALLOWED_TO_SET_USERS_EMAIL: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_SET_USERS_EMAIL";
+    pub const YOU_ARE_NOT_ALLOWED_TO_SET_USERS_PHONE_NUMBER: &str =
+        "YOU_ARE_NOT_ALLOWED_TO_SET_USERS_PHONE_NUMBER";
+    pub const PASSWORD_CANNOT_BE_UPDATED_VIA_UPDATE_USER: &str =
+        "PASSWORD_CANNOT_BE_UPDATED_VIA_UPDATE_USER";
+    pub const USER_ID_CANNOT_BE_UPDATED: &str = "USER_ID_CANNOT_BE_UPDATED";
 }

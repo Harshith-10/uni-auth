@@ -5,11 +5,12 @@ use sqlx::Row;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use auth_core::adapter::{AuthAdapter, BoxFuture};
+use auth_core::adapter::{filter_and_paginate_users, AuthAdapter, BoxFuture};
 use auth_core::error::AdapterError;
 use auth_core::models::{
-    AccountRecord, CreateAccountInput, CreateSessionInput, CreateUserInput,
-    CreateVerificationInput, SessionRecord, UserRecord, VerificationRecord,
+    AccountRecord, AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput,
+    CreateSessionInput, CreateUserInput, CreateVerificationInput, SessionRecord, UserRecord,
+    VerificationRecord,
 };
 
 const POSTGRES_SCHEMA: &str = include_str!("../migrations/postgres.sql");
@@ -37,6 +38,10 @@ fn map_user_row(row: PgRow) -> Result<UserRecord, AdapterError> {
         updated_at: row
             .try_get("updated_at")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
+        role: row.try_get("role").ok().flatten(),
+        banned: row.try_get("banned").unwrap_or(false),
+        ban_reason: row.try_get("ban_reason").ok().flatten(),
+        ban_expires: row.try_get("ban_expires").ok().flatten(),
     })
 }
 
@@ -66,6 +71,7 @@ fn map_session_row(row: PgRow) -> Result<SessionRecord, AdapterError> {
         updated_at: row
             .try_get("updated_at")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
+        impersonated_by: row.try_get("impersonated_by").ok().flatten(),
     })
 }
 
@@ -147,9 +153,18 @@ impl PostgresAuthAdapter {
         Self { pool }
     }
 
-    /// Executes the embedded Better Auth schema migration.
+    /// Executes the embedded Better Auth schema migration and idempotently upgrades older tables.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
         sqlx::raw_sql(POSTGRES_SCHEMA).execute(&self.pool).await?;
+        for stmt in [
+            r#"ALTER TABLE "user" ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'"#,
+            r#"ALTER TABLE "user" ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT FALSE"#,
+            r#"ALTER TABLE "user" ADD COLUMN IF NOT EXISTS ban_reason TEXT"#,
+            r#"ALTER TABLE "user" ADD COLUMN IF NOT EXISTS ban_expires TIMESTAMPTZ"#,
+            r#"ALTER TABLE "session" ADD COLUMN IF NOT EXISTS impersonated_by TEXT"#,
+        ] {
+            let _ = sqlx::query(stmt).execute(&self.pool).await;
+        }
         Ok(())
     }
 
@@ -168,11 +183,12 @@ impl AuthAdapter for PostgresAuthAdapter {
             let id = input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
             let email = input.email.to_lowercase();
             let now = OffsetDateTime::now_utc();
+            let default_role = "user".to_string();
 
             let res = sqlx::query(
                 r#"
-                INSERT INTO "user" (id, name, email, email_verified, image, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO "user" (id, name, email, email_verified, image, role, banned, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7, $8)
                 "#,
             )
             .bind(&id)
@@ -180,6 +196,7 @@ impl AuthAdapter for PostgresAuthAdapter {
             .bind(&email)
             .bind(input.email_verified)
             .bind(&input.image)
+            .bind(&default_role)
             .bind(now)
             .bind(now)
             .execute(&pool)
@@ -194,6 +211,10 @@ impl AuthAdapter for PostgresAuthAdapter {
                     image: input.image,
                     created_at: now,
                     updated_at: now,
+                    role: Some(default_role),
+                    banned: false,
+                    ban_reason: None,
+                    ban_expires: None,
                 }),
                 Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
                     Err(AdapterError::UniqueViolation(e.message().to_string()))
@@ -306,6 +327,87 @@ impl AuthAdapter for PostgresAuthAdapter {
             .map_err(|e| AdapterError::Query(e.to_string()))?;
 
             map_user_row(row)
+        })
+    }
+
+    fn update_user_admin(
+        &self,
+        id: &str,
+        fields: AdminUpdateUserFields,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        let pool = self.pool.clone();
+        let id = id.to_string();
+        Box::pin(async move {
+            let current_row = sqlx::query(r#"SELECT * FROM "user" WHERE id = $1"#)
+                .bind(&id)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?
+                .ok_or(AdapterError::NotFound)?;
+
+            let current = map_user_row(current_row)?;
+            let new_name = fields.name.unwrap_or(current.name);
+            let new_email = fields
+                .email
+                .map(|e| e.to_lowercase())
+                .unwrap_or(current.email);
+            let new_verified = fields.email_verified.unwrap_or(current.email_verified);
+            let new_image = fields.image.unwrap_or(current.image);
+            let new_role = fields.role.or(current.role);
+            let new_banned = fields.banned.unwrap_or(current.banned);
+            let new_ban_reason = fields.ban_reason.unwrap_or(current.ban_reason);
+            let new_ban_expires = fields.ban_expires.unwrap_or(current.ban_expires);
+            let now = OffsetDateTime::now_utc();
+
+            let res = sqlx::query(
+                r#"
+                UPDATE "user"
+                SET name = $1, email = $2, email_verified = $3, image = $4,
+                    role = $5, banned = $6, ban_reason = $7, ban_expires = $8, updated_at = $9
+                WHERE id = $10
+                RETURNING *
+                "#,
+            )
+            .bind(&new_name)
+            .bind(&new_email)
+            .bind(new_verified)
+            .bind(&new_image)
+            .bind(&new_role)
+            .bind(new_banned)
+            .bind(&new_ban_reason)
+            .bind(new_ban_expires)
+            .bind(now)
+            .bind(&id)
+            .fetch_one(&pool)
+            .await;
+
+            match res {
+                Ok(row) => map_user_row(row),
+                Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                    Err(AdapterError::UniqueViolation(e.message().to_string()))
+                }
+                Err(e) => Err(AdapterError::Query(e.to_string())),
+            }
+        })
+    }
+
+    fn list_users(
+        &self,
+        filter: AdminListUsersFilter,
+    ) -> BoxFuture<'static, Result<(Vec<UserRecord>, usize), AdapterError>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let rows = sqlx::query(r#"SELECT * FROM "user""#)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            let users: Vec<UserRecord> = rows
+                .into_iter()
+                .map(map_user_row)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(filter_and_paginate_users(users, &filter))
         })
     }
 
@@ -527,8 +629,8 @@ impl AuthAdapter for PostgresAuthAdapter {
 
             let res = sqlx::query(
                 r#"
-                INSERT INTO "session" (id, user_id, token, expires_at, ip_address, user_agent, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                INSERT INTO "session" (id, user_id, token, expires_at, ip_address, user_agent, impersonated_by, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)
                 "#,
             )
             .bind(&id)
@@ -552,6 +654,55 @@ impl AuthAdapter for PostgresAuthAdapter {
                     user_agent: input.user_agent,
                     created_at: now,
                     updated_at: now,
+                    impersonated_by: None,
+                }),
+                Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                    Err(AdapterError::UniqueViolation(e.message().to_string()))
+                }
+                Err(e) => Err(AdapterError::Query(e.to_string())),
+            }
+        })
+    }
+
+    fn create_impersonated_session(
+        &self,
+        input: CreateSessionInput,
+        impersonated_by: String,
+    ) -> BoxFuture<'static, Result<SessionRecord, AdapterError>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let id = input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let now = OffsetDateTime::now_utc();
+
+            let res = sqlx::query(
+                r#"
+                INSERT INTO "session" (id, user_id, token, expires_at, ip_address, user_agent, impersonated_by, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "#,
+            )
+            .bind(&id)
+            .bind(&input.user_id)
+            .bind(&input.token)
+            .bind(input.expires_at)
+            .bind(&input.ip_address)
+            .bind(&input.user_agent)
+            .bind(&impersonated_by)
+            .bind(now)
+            .bind(now)
+            .execute(&pool)
+            .await;
+
+            match res {
+                Ok(_) => Ok(SessionRecord {
+                    id,
+                    user_id: input.user_id,
+                    token: input.token,
+                    expires_at: input.expires_at,
+                    ip_address: input.ip_address,
+                    user_agent: input.user_agent,
+                    created_at: now,
+                    updated_at: now,
+                    impersonated_by: Some(impersonated_by),
                 }),
                 Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
                     Err(AdapterError::UniqueViolation(e.message().to_string()))
