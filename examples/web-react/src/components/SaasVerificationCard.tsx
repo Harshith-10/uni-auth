@@ -16,6 +16,7 @@ import {
   CollapsibleTrigger,
 } from "./ui/collapsible";
 import { CopyButton } from "./CopyButton";
+import { formatDateTime } from "../lib/utils";
 import {
   Activity,
   AlertCircle,
@@ -84,25 +85,29 @@ export function SaasVerificationCard({
           <div className="space-y-3.5">
             {/* Status summary grid */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-muted/40 border border-border/60 p-3">
-              <div className="space-y-1">
+              <div className="space-y-1 min-w-0">
                 <span className="text-[11px] text-muted-foreground uppercase tracking-wider block">
                   Transport
                 </span>
-                <Badge variant="outline" className="font-mono text-xs">
-                  {saasData.transport || "Bearer"}
+                <Badge
+                  variant="outline"
+                  className="font-mono text-xs max-w-full truncate block text-left"
+                  title={saasData.transport || "Cookie"}
+                >
+                  {saasData.transport || "Cookie"}
                 </Badge>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1 min-w-0">
                 <span className="text-[11px] text-muted-foreground uppercase tracking-wider block">
                   Status
                 </span>
-                <span className="font-semibold text-xs text-foreground block">
+                <span className="font-semibold text-xs text-foreground block truncate">
                   {saasData.status || "Authenticated"}
                 </span>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1 min-w-0">
                 <span className="text-[11px] text-muted-foreground uppercase tracking-wider block">
                   Email Verified
                 </span>
@@ -111,14 +116,15 @@ export function SaasVerificationCard({
                 </span>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1 min-w-0">
                 <span className="text-[11px] text-muted-foreground uppercase tracking-wider block">
                   Session Expiry
                 </span>
-                <span className="text-xs font-mono text-muted-foreground block truncate">
-                  {saasData.session?.expiresAt
-                    ? new Date(saasData.session.expiresAt).toLocaleTimeString()
-                    : "N/A"}
+                <span
+                  className="text-xs font-mono text-muted-foreground block truncate"
+                  title={formatDateTime(saasData.session?.expiresAt)}
+                >
+                  {formatDateTime(saasData.session?.expiresAt)}
                 </span>
               </div>
             </div>

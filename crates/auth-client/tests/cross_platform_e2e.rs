@@ -29,6 +29,17 @@ async fn saas_me(session: CurrentSession) -> Response {
         "Cookie (Web Browser / better-auth-client)"
     };
 
+    let expires_at = session
+        .session
+        .expires_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    let created_at = session
+        .session
+        .created_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+
     Json(serde_json::json!({
         "status": "authenticated",
         "transport": transport,
@@ -36,8 +47,8 @@ async fn saas_me(session: CurrentSession) -> Response {
         "session": {
             "id": session.session.id,
             "token": session.session.token,
-            "expiresAt": session.session.expires_at,
-            "createdAt": session.session.created_at,
+            "expiresAt": expires_at,
+            "createdAt": created_at,
         }
     }))
     .into_response()

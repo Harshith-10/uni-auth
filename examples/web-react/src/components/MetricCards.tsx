@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { CopyButton } from "./CopyButton";
 import { User, Shield, KeyRound, Laptop, CheckCircle2, AlertCircle } from "lucide-react";
+import { formatDateTime } from "../lib/utils";
 
 interface MetricCardsProps {
   session: any;
@@ -110,9 +111,13 @@ export function MetricCards({
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground truncate">
-            {saasData?.session?.expiresAt
-              ? `Expires: ${new Date(saasData.session.expiresAt).toLocaleTimeString()}`
-              : "Bearer token authenticated"}
+            {(() => {
+              const expiryRaw = saasData?.session?.expiresAt || session?.session?.expiresAt;
+              const formatted = expiryRaw ? formatDateTime(expiryRaw) : null;
+              return formatted && formatted !== "N/A"
+                ? `Expires: ${formatted}`
+                : "Active session";
+            })()}
           </p>
           <div className="pt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground font-mono">
             <span className="truncate">SID: {sessionId ? `${sessionId.slice(0, 10)}...` : "Active"}</span>

@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "./ui/table";
 import { CopyButton } from "./CopyButton";
+import { parseDate } from "../lib/utils";
 import {
   Globe,
   Laptop,
@@ -109,7 +110,7 @@ export function ActiveSessionsCard({
                 {sessions.map((s, idx) => {
                   const isCurrent = s.id === currentSessionId;
                   const tokenToRevoke = s.token || s.id;
-                  const expires = s.expiresAt ? new Date(s.expiresAt) : null;
+                  const expires = parseDate(s.expiresAt);
                   const isExpired = expires ? expires.getTime() < Date.now() : false;
 
                   return (

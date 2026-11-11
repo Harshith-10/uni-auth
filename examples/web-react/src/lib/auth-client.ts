@@ -24,12 +24,14 @@ export const authClient = createAuthClient({
   plugins: [adminClient()],
   fetchOptions: {
     credentials: "include",
-    auth: {
-      type: "Bearer",
-      token: () => authToken,
-    },
+    ...(isNodeTestEnv && {
+      auth: {
+        type: "Bearer",
+        token: () => authToken,
+      },
+    }),
     onRequest: (ctx) => {
-      if (authToken) {
+      if (isNodeTestEnv && authToken) {
         ctx.headers.set("authorization", `Bearer ${authToken}`);
       }
       if (adminAuthToken) {
@@ -41,9 +43,11 @@ export const authClient = createAuthClient({
       return ctx;
     },
     onResponse: (ctx) => {
-      const setAuthToken = ctx.response.headers.get("set-auth-token");
-      if (setAuthToken) {
-        authToken = setAuthToken;
+      if (isNodeTestEnv) {
+        const setAuthToken = ctx.response.headers.get("set-auth-token");
+        if (setAuthToken) {
+          authToken = setAuthToken;
+        }
       }
       if (ctx.response.headers.has("set-admin-auth-token")) {
         const setAdminToken =
