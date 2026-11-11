@@ -752,14 +752,14 @@ impl AuthAdapter for SqliteAuthAdapter {
                 separated.push_bind_unseparated(if verified { 1i64 } else { 0i64 });
             }
             match fields.image {
-                FieldUpdate::Set(ref img) if !img.is_empty() => {
+                FieldUpdate::Set(ref img) => {
                     separated.push("image = ");
                     separated.push_bind_unseparated(img);
                 }
                 FieldUpdate::Clear => {
                     separated.push("image = NULL");
                 }
-                _ => {}
+                FieldUpdate::Unchanged => {}
             }
             if let Some(ref role) = fields.role {
                 separated.push("role = ");

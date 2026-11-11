@@ -80,13 +80,20 @@ pub fn verify_trusted_origin(
         return Ok(());
     }
 
-    if let Some(origin_val) = headers.get(axum::http::header::ORIGIN) {
-        let origin_str = origin_val
-            .to_str()
-            .map_err(|_| AuthError::InvalidOrigin)?
-            .trim()
-            .trim_end_matches('/');
+    let origin_candidate = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::REFERER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| url::Url::parse(s.trim()).ok())
+                .map(|u| format!("{}://{}", u.scheme(), u.host_str().unwrap_or("")))
+        });
 
+    if let Some(ref origin_str) = origin_candidate {
+        let origin_str = origin_str.trim_end_matches('/');
         let parsed_origin = url::Url::parse(origin_str).ok();
 
         let allowed = trusted_origins.iter().any(|trusted| {

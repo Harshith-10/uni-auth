@@ -1,11 +1,11 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
 
 use crate::error_to_response;
-use crate::extract::{CurrentSession, FreshSession, extract_request_meta};
+use crate::extract::{CurrentSession, ExtractedMeta, FreshSession};
 use crate::state::AuthState;
 use auth_core::OAuthCallbackResult;
 use auth_proto::{
@@ -127,11 +127,11 @@ fn is_loopback_ott_callback(url: &str) -> bool {
 
 pub async fn oauth_callback(
     State(state): State<AuthState>,
-    headers: HeaderMap,
+    meta: ExtractedMeta,
     Path(provider_name): Path<String>,
     Query(query): Query<OAuthCallbackQuery>,
 ) -> Response {
-    let meta = extract_request_meta(&headers);
+    let meta = meta.into_inner();
     if let Some(ref err) = query.error {
         let desc = query.error_description.as_deref().unwrap_or(err);
         return (

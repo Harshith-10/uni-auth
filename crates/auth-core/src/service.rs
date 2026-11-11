@@ -25,7 +25,7 @@ use crate::error::{AdapterError, AuthError};
 use crate::hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter};
 use crate::models::{
     AccountRecord, CreateAccountInput, CreateSessionInput, CreateUserInput,
-    CreateVerificationInput, RequestMeta, SessionRecord, UserRecord,
+    CreateVerificationInput, RequestMeta, SessionRecord, UpdateUserFields, UserRecord,
 };
 #[allow(deprecated)]
 use crate::plugin::AuthPlugin;
@@ -1414,23 +1414,53 @@ impl AuthService {
             .await
     }
 
-    /// Verifies email via token and optionally issues a session when `auto_sign_in_after_verification` is enabled.
+    /// Verifies email via token (for signup verification or change-email confirmation) and optionally issues a session when `auto_sign_in_after_verification` is enabled.
     pub async fn verify_email_with_meta(
         &self,
         token: &str,
         meta: RequestMeta,
     ) -> Result<VerifyEmailResponse, AuthError> {
-        let identifier = format!("verify-email:{token}");
-        let record = self
-            .adapter
-            .consume_verification(&identifier)
-            .await?
-            .ok_or(AuthError::InvalidToken)?;
+        let verify_id = format!("verify-email:{token}");
+        let change_id = format!("change-email:{token}");
 
-        let user_id = record.value;
-        self.adapter
-            .update_user_email_verified(&user_id, true)
-            .await?;
+        let (record, is_change_email) = match self.adapter.consume_verification(&verify_id).await? {
+            Some(rec) => (rec, false),
+            None => match self.adapter.consume_verification(&change_id).await? {
+                Some(rec) => (rec, true),
+                None => return Err(AuthError::InvalidToken),
+            },
+        };
+
+        if record.is_expired() {
+            return Err(AuthError::TokenExpired);
+        }
+
+        let user_id = if is_change_email {
+            let (uid, new_email) = match record.value.split_once(':') {
+                Some((u, e)) => (u.to_string(), e.to_string()),
+                None => (record.value, String::new()),
+            };
+
+            if !new_email.is_empty() {
+                self.adapter
+                    .update_user(
+                        &uid,
+                        UpdateUserFields {
+                            email: Some(new_email),
+                            email_verified: Some(true),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+            }
+            uid
+        } else {
+            let uid = record.value;
+            self.adapter
+                .update_user_email_verified(&uid, true)
+                .await?;
+            uid
+        };
 
         let user = self.adapter.find_user_by_id(&user_id).await?;
         let user_wire = user.as_ref().map(|u| u.to_wire());

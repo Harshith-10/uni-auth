@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 
 use crate::cookies::{build_clear_session_cookie, build_session_cookie};
 use crate::error::ApiError;
-use crate::extract::{CurrentSession, extract_request_meta};
+use crate::extract::{CurrentSession, ExtractedMeta};
 use crate::state::AuthState;
 use auth_core::AdminServiceExt;
 use auth_proto::{
@@ -172,11 +172,11 @@ pub async fn unban_user(
 /// `POST /api/auth/admin/impersonate-user`
 pub async fn impersonate_user(
     State(state): State<AuthState>,
-    headers: HeaderMap,
+    meta: ExtractedMeta,
     current_session: CurrentSession,
     Json(payload): Json<AdminUserIdRequest>,
 ) -> Result<Response, ApiError> {
-    let meta = extract_request_meta(&headers);
+    let meta = meta.into_inner();
     let admin_svc = state.service.admin()?;
     let res = admin_svc
         .impersonate_user(&current_session.user, &payload.user_id, meta)

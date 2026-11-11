@@ -1,5 +1,5 @@
 use axum::extract::Query;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 
@@ -11,10 +11,27 @@ pub struct ErrorQuery {
     pub error_description: Option<String>,
 }
 
-/// `GET /api/auth/error`: Renders a standardized error page with sanitized error code and description.
-pub async fn error_page(Query(query): Query<ErrorQuery>) -> Response {
+/// `GET /api/auth/error`: Renders a standardized error page or JSON debug response.
+pub async fn error_page(headers: HeaderMap, Query(query): Query<ErrorQuery>) -> Response {
     let error_code = query.error.as_deref().unwrap_or("UNKNOWN");
     let desc = query.error_description.as_deref().unwrap_or("");
+
+    let accepts_json = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.contains("application/json"))
+        .unwrap_or(false);
+
+    if accepts_json {
+        return (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "error": error_code,
+                "error_description": desc,
+            })),
+        )
+            .into_response();
+    }
 
     let html = format!(
         r#"<!DOCTYPE html>

@@ -564,6 +564,24 @@ async fn test_sqlite_unified_update_user() {
     assert_eq!(updated.role.as_deref(), Some("admin"));
     assert!(updated.banned);
     assert_eq!(updated.ban_reason.as_deref(), Some("Terms violation"));
+
+    // Now test clearing multiple fields simultaneously (Finding 13 edge case)
+    let clear_patch = UpdateUserFields {
+        name: None,
+        email: None,
+        image: FieldUpdate::Clear,
+        email_verified: None,
+        role: None,
+        banned: None,
+        ban_reason: FieldUpdate::Clear,
+        ban_expires: FieldUpdate::Clear,
+    };
+
+    let cleared = adapter.update_user(&user.id, clear_patch).await.unwrap();
+    assert_eq!(cleared.name, "Sqlite Mutated"); // Unchanged
+    assert_eq!(cleared.image, None); // Cleared
+    assert_eq!(cleared.ban_reason, None); // Cleared
+    assert_eq!(cleared.ban_expires, None); // Cleared
 }
 
 #[tokio::test]

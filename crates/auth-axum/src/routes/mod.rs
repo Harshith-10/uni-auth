@@ -123,10 +123,15 @@ pub fn auth_routes_with_plugins(state: &AuthState) -> Router<AuthState> {
         }
     }
 
-    router.layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        crate::plugin::endpoint_hooks_middleware,
-    ))
+    router
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::plugin::endpoint_hooks_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::csrf_origin_middleware,
+        ))
 }
 
 /// Constructs a self-contained auth router with `AuthState` applied, including plugins and endpoint hooks (state: `()`).

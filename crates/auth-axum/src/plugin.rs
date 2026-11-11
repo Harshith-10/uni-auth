@@ -98,8 +98,11 @@ pub async fn endpoint_hooks_middleware(
     }
 
     // Enforce plugin rate limits before executing endpoint
-    let client_ip = crate::extract::extract_request_meta(req.headers())
-        .ip_address
+    let peer_ip = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip());
+    let client_ip = crate::extract::extract_client_ip(req.headers(), peer_ip, &state.trusted_proxies)
         .unwrap_or_else(|| "local".to_string());
     if let Err(err) = state.service.check_plugin_rate_limits(&path, &client_ip) {
         return crate::error::error_to_response(err);

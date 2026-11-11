@@ -20,8 +20,8 @@ pub mod state;
 pub use cors::build_auth_cors_layer;
 pub use error::*;
 pub use extract::{
-    CurrentSession, FreshSession, IpCidr, OptionalSession, extract_client_ip, extract_request_meta,
-    extract_request_meta_with_peer, extract_token_from_headers,
+    CurrentSession, ExtractedMeta, FreshSession, IpCidr, OptionalSession, extract_client_ip,
+    extract_request_meta, extract_request_meta_with_peer, extract_token_from_headers,
 };
 pub use middleware::{csrf_origin_middleware, is_loopback_url, validate_callback_url, verify_trusted_origin};
 pub use oauth::ReqwestOAuthClient;

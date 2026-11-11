@@ -679,14 +679,14 @@ impl AuthAdapter for PostgresAuthAdapter {
                 separated.push_bind_unseparated(verified);
             }
             match fields.image {
-                FieldUpdate::Set(ref img) if !img.is_empty() => {
+                FieldUpdate::Set(ref img) => {
                     separated.push("image = ");
                     separated.push_bind_unseparated(img);
                 }
                 FieldUpdate::Clear => {
                     separated.push("image = NULL");
                 }
-                _ => {}
+                FieldUpdate::Unchanged => {}
             }
             if let Some(ref role) = fields.role {
                 separated.push("role = ");

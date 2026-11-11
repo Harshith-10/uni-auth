@@ -1,11 +1,11 @@
 use axum::Json;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
 
 use crate::error_to_response;
-use crate::extract::extract_request_meta;
+use crate::extract::ExtractedMeta;
 use crate::state::AuthState;
 use auth_proto::SendVerificationEmailRequest;
 
@@ -28,7 +28,7 @@ pub struct VerifyEmailQuery {
 
 pub async fn verify_email(
     State(state): State<AuthState>,
-    headers: HeaderMap,
+    meta: ExtractedMeta,
     Query(query): Query<VerifyEmailQuery>,
 ) -> Response {
     if let Some(ref callback) = query.callback_url {
@@ -38,7 +38,7 @@ pub async fn verify_email(
         }
     }
 
-    let meta = extract_request_meta(&headers);
+    let meta = meta.into_inner();
     match state
         .service
         .verify_email_with_meta(&query.token, meta)

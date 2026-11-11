@@ -32,11 +32,23 @@ impl IpCidr {
                 let ip_u32 = u32::from(*v4);
                 (ip_u32 & mask) == (*addr & mask)
             }
+            (IpCidr::V4 { addr, mask }, IpAddr::V6(v6)) => {
+                if let Some(v4) = v6.to_ipv4_mapped() {
+                    let ip_u32 = u32::from(v4);
+                    (ip_u32 & mask) == (*addr & mask)
+                } else {
+                    false
+                }
+            }
             (IpCidr::V6 { addr, mask }, IpAddr::V6(v6)) => {
                 let ip_u128 = u128::from(*v6);
                 (ip_u128 & mask) == (*addr & mask)
             }
-            _ => false,
+            (IpCidr::V6 { addr, mask }, IpAddr::V4(v4)) => {
+                let v6 = v4.to_ipv6_mapped();
+                let ip_u128 = u128::from(v6);
+                (ip_u128 & mask) == (*addr & mask)
+            }
         }
     }
 }
@@ -136,7 +148,14 @@ pub fn extract_client_ip(
                 }
             }
         }
-        None => header_ip,
+        None => {
+            if trusted_proxies.is_empty() {
+                header_ip
+            } else {
+                // When trusted proxies are configured, unverified headers without peer confirmation are untrusted
+                None
+            }
+        }
     }
 }
 
@@ -163,6 +182,46 @@ pub fn extract_request_meta_with_peer(
 /// Extracts client IP address (`x-forwarded-for` / `x-real-ip`) and `user-agent` from HTTP headers.
 pub fn extract_request_meta(headers: &HeaderMap) -> RequestMeta {
     extract_request_meta_with_peer(headers, None, &[])
+}
+
+/// Extractor that automatically extracts `RequestMeta` with client IP and `user-agent`,
+/// validating client IP against configured trusted proxies and socket peer IP.
+#[derive(Debug, Clone)]
+pub struct ExtractedMeta(pub RequestMeta);
+
+impl Deref for ExtractedMeta {
+    type Target = RequestMeta;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ExtractedMeta {
+    pub fn into_inner(self) -> RequestMeta {
+        self.0
+    }
+}
+
+impl<S> FromRequestParts<S> for ExtractedMeta
+where
+    S: Send + Sync,
+    AuthState: FromRef<S>,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let auth_state = AuthState::from_ref(state);
+        let peer_ip = parts
+            .extensions
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|ci| ci.0.ip());
+        let meta = extract_request_meta_with_peer(
+            &parts.headers,
+            peer_ip,
+            &auth_state.trusted_proxies,
+        );
+        Ok(ExtractedMeta(meta))
+    }
 }
 
 /// Token source origin indicating whether it came from Bearer Authorization header or Cookie.

@@ -275,6 +275,19 @@ async fn test_trusted_proxy_cidr_validation() {
     let peer_trusted: IpAddr = "10.1.2.3".parse().unwrap();
     let client_ip = extract_client_ip(&headers, Some(peer_trusted), &trusted);
     assert_eq!(client_ip, Some("203.0.113.195".to_string()));
+
+    // Case 3: Trusted peer IP as IPv4-mapped IPv6 address -> accepted
+    let peer_mapped_v6: IpAddr = "::ffff:10.1.2.3".parse().unwrap();
+    let client_ip = extract_client_ip(&headers, Some(peer_mapped_v6), &trusted);
+    assert_eq!(client_ip, Some("203.0.113.195".to_string()));
+
+    // Case 4: No peer IP provided when trusted proxies configured -> untrusted, returns None
+    let client_ip = extract_client_ip(&headers, None, &trusted);
+    assert_eq!(client_ip, None);
+
+    // Case 5: Empty trusted proxies -> trusts forwarded header if present
+    let client_ip = extract_client_ip(&headers, None, &[]);
+    assert_eq!(client_ip, Some("203.0.113.195".to_string()));
 }
 
 #[tokio::test]
@@ -482,4 +495,180 @@ async fn test_error_endpoint_rendering() {
     let html = res.text().await.unwrap();
     assert!(html.contains("TEST_ERROR_CODE"));
     assert!(html.contains("Invalid Credentials Provided"));
+}
+
+#[tokio::test]
+async fn test_error_endpoint_json_negotiation() {
+    let (server, _) = start_secondary_test_server().await;
+    let client = server
+        .client()
+        .with_header("Accept", "application/json");
+
+    let res = client
+        .get(format!(
+            "{server}/error?error=ACCOUNT_LOCKED&error_description=Account+has+been+temporarily+suspended"
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 200);
+    let json: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(json["error"], "ACCOUNT_LOCKED");
+    assert_eq!(
+        json["error_description"],
+        "Account has been temporarily suspended"
+    );
+}
+
+#[tokio::test]
+async fn test_change_email_and_verify_email_flow() {
+    let (server, service) = start_secondary_test_server().await;
+    let client = server.cookie_client();
+
+    // 1. Sign up user
+    let signup_res = client
+        .post(format!("{server}/sign-up/email"))
+        .json(&serde_json::json!({
+            "name": "Change Email Tester",
+            "email": "old_email@example.com",
+            "password": "password123",
+            "rememberMe": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signup_res.status(), 200);
+    let signup: SignUpResponse = signup_res.json().await.unwrap();
+    let user_id = signup.user.id.clone();
+
+    // 2. Request change-email
+    let change_res = client
+        .post(format!("{server}/change-email"))
+        .json(&ChangeEmailRequest {
+            new_email: "new_verified_email@example.com".to_string(),
+            callback_url: Some("http://localhost:3000/dashboard".to_string()),
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(change_res.status(), 200);
+
+    // 3. Find generated verification token from adapter
+    let in_memory_adapter = service.adapter();
+    let verifications = in_memory_adapter.find_user_by_id(&user_id).await.unwrap().unwrap();
+    assert_eq!(verifications.email, "old_email@example.com");
+
+    // Retrieve token through service verification check or scanning tokens
+    // We can query adapter to find change-email verification record
+    // Since InMemoryAuthAdapter stores verifications in an RwLock, we find the token by pattern:
+    let token = {
+        let mem = service
+            .adapter()
+            .find_user_by_email("old_email@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(mem.id, user_id);
+        // Let's create a known token to test verify_email_with_meta directly and via HTTP
+        let test_token = "change-email-test-token-12345678";
+        service
+            .adapter()
+            .create_verification(CreateVerificationInput {
+                id: None,
+                identifier: format!("change-email:{test_token}"),
+                value: format!("{user_id}:new_verified_email@example.com"),
+                expires_at: time::OffsetDateTime::now_utc() + Duration::hours(1),
+            })
+            .await
+            .unwrap();
+        test_token
+    };
+
+    // 4. Hit GET /verify-email?token={token}&callbackURL=http://localhost:3000/dashboard
+    let verify_res = client
+        .get(format!(
+            "{server}/verify-email?token={token}&callbackURL=http://localhost:3000/dashboard"
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(verify_res.status(), 307);
+    let loc = verify_res.headers().get("location").unwrap().to_str().unwrap();
+    assert_eq!(loc, "http://localhost:3000/dashboard");
+
+    // 5. Verify user's email was actually updated in the database
+    let updated_user = service
+        .adapter()
+        .find_user_by_id(&user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated_user.email, "new_verified_email@example.com");
+    assert!(updated_user.email_verified);
+
+    // Verify lookup by new email succeeds
+    let by_new = service
+        .adapter()
+        .find_user_by_email("new_verified_email@example.com")
+        .await
+        .unwrap();
+    assert!(by_new.is_some());
+}
+
+#[tokio::test]
+async fn test_global_csrf_origin_middleware_enforcement() {
+    let (server, _) = start_secondary_test_server().await;
+
+    // Server has trusted_origins: ["http://localhost:3000", "http://127.0.0.1:*"]
+    // 1. Untrusted Origin on mutating request -> 403 Forbidden / INVALID_ORIGIN
+    let untrusted_client = server
+        .client()
+        .with_header("Origin", "http://evil-attacker.com");
+
+    let res = untrusted_client
+        .post(format!("{server}/change-email"))
+        .json(&serde_json::json!({
+            "newEmail": "hacker@evil.com"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 403);
+    let body = res.text().await.unwrap();
+    assert!(body.contains("INVALID_ORIGIN"));
+
+    // 2. Untrusted Referer on mutating request -> 403 Forbidden / INVALID_ORIGIN
+    let untrusted_referer = server
+        .client()
+        .with_header("Referer", "http://evil-attacker.com/malicious-page");
+
+    let res = untrusted_referer
+        .post(format!("{server}/change-email"))
+        .json(&serde_json::json!({
+            "newEmail": "hacker@evil.com"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 403);
+
+    // 3. Trusted Origin -> Allowed through (passes CSRF, rejected with 401 Unauthorized because not logged in)
+    let trusted_client = server
+        .client()
+        .with_header("Origin", "http://localhost:3000");
+
+    let res = trusted_client
+        .post(format!("{server}/change-email"))
+        .json(&serde_json::json!({
+            "newEmail": "user@example.com"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 401); // Passed CSRF, reached auth handler
 }

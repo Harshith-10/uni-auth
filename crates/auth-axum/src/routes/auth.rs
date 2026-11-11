@@ -4,13 +4,14 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use crate::error_to_response;
-use crate::extract::{extract_request_meta, extract_token_from_headers};
+use crate::extract::{ExtractedMeta, extract_token_from_headers};
 use crate::middleware::verify_trusted_origin;
 use crate::state::AuthState;
 use auth_proto::{SignInEmailRequest, SignOutRequest, SignUpEmailRequest};
 
 pub async fn sign_up_email(
     State(state): State<AuthState>,
+    meta: ExtractedMeta,
     headers: HeaderMap,
     Json(payload): Json<SignUpEmailRequest>,
 ) -> Response {
@@ -25,7 +26,7 @@ pub async fn sign_up_email(
     }
 
     let remember_me = payload.remember_me.unwrap_or(true);
-    let meta = extract_request_meta(&headers);
+    let meta = meta.into_inner();
 
     match state.service.sign_up_email_with_meta(payload, meta).await {
         Ok(res) => {
@@ -55,6 +56,7 @@ pub async fn sign_up_email(
 
 pub async fn sign_in_email(
     State(state): State<AuthState>,
+    meta: ExtractedMeta,
     headers: HeaderMap,
     Json(payload): Json<SignInEmailRequest>,
 ) -> Response {
@@ -70,7 +72,7 @@ pub async fn sign_in_email(
 
     let callback_url = payload.callback_url.clone();
     let remember_me = payload.remember_me.unwrap_or(true);
-    let meta = extract_request_meta(&headers);
+    let meta = meta.into_inner();
 
     match state.service.sign_in_email_with_meta(payload, meta).await {
         Ok(res) => {
