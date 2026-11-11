@@ -338,3 +338,114 @@ async fn test_auth_service_with_sqlite_backend() {
         .expect("Profile update with null image should succeed");
     assert_eq!(cleared.user.as_ref().unwrap().image, None);
 }
+
+#[tokio::test]
+async fn test_sqlite_list_users_parameterized_query_builder() {
+    let adapter = SqliteAuthAdapter::new_in_memory()
+        .await
+        .expect("in-memory sqlite should init");
+
+    // Seed 5 users with varied attributes
+    let u1 = adapter
+        .create_user(CreateUserInput {
+            id: None,
+            name: "Alice Adams".to_string(),
+            email: "alice@example.com".to_string(),
+            image: None,
+            email_verified: true,
+        })
+        .await
+        .unwrap();
+
+    let u2 = adapter
+        .create_user(CreateUserInput {
+            id: None,
+            name: "Bob Baker".to_string(),
+            email: "bob@example.com".to_string(),
+            image: None,
+            email_verified: false,
+        })
+        .await
+        .unwrap();
+
+    let u3 = adapter
+        .create_user(CreateUserInput {
+            id: None,
+            name: "Charlie Clark".to_string(),
+            email: "charlie@example.com".to_string(),
+            image: None,
+            email_verified: true,
+        })
+        .await
+        .unwrap();
+
+    adapter
+        .update_user_admin(
+            &u2.id,
+            AdminUpdateUserFields {
+                role: Some("admin".to_string()),
+                banned: Some(true),
+                ban_reason: Some(Some("Spamming".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // 1. Search name with starts_with
+    let (res, total) = adapter
+        .list_users(AdminListUsersFilter {
+            search_field: Some("name".to_string()),
+            search_value: Some("ali".to_string()),
+            search_operator: Some("starts_with".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(res[0].id, u1.id);
+
+    // 2. Filter by banned = true
+    let (res, total) = adapter
+        .list_users(AdminListUsersFilter {
+            filter_field: Some("banned".to_string()),
+            filter_value: Some("true".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(res[0].id, u2.id);
+
+    // 3. Filter by role = admin
+    let (res, total) = adapter
+        .list_users(AdminListUsersFilter {
+            filter_field: Some("role".to_string()),
+            filter_value: Some("admin".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(res[0].id, u2.id);
+
+    // 4. Pagination: limit 2, offset 1, sort by name ASC
+    let (res, total) = adapter
+        .list_users(AdminListUsersFilter {
+            sort_by: Some("name".to_string()),
+            sort_direction: Some("asc".to_string()),
+            limit: Some(2),
+            offset: Some(1),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(total, 3);
+    assert_eq!(res.len(), 2);
+    assert_eq!(res[0].id, u2.id); // Bob Baker is 2nd alphabetically
+    assert_eq!(res[1].id, u3.id); // Charlie Clark is 3rd alphabetically
+
+    // 5. Delete user transaction verification
+    adapter.delete_user(&u1.id).await.unwrap();
+    assert!(adapter.find_user_by_id(&u1.id).await.unwrap().is_none());
+}

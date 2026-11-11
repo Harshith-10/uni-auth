@@ -1,11 +1,11 @@
 //! PostgreSQL implementation of `AuthAdapter`.
 
 use sqlx::postgres::{PgPool, PgRow};
-use sqlx::Row;
+use sqlx::{QueryBuilder, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use auth_core::adapter::{filter_and_paginate_users, AuthAdapter, BoxFuture};
+use auth_core::adapter::{AuthAdapter, BoxFuture};
 use auth_core::error::AdapterError;
 use auth_core::models::{
     AccountRecord, AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput,
@@ -170,6 +170,135 @@ impl PostgresAuthAdapter {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+}
+
+fn apply_postgres_user_filters(
+    qb: &mut QueryBuilder<'_, sqlx::Postgres>,
+    filter: &AdminListUsersFilter,
+) {
+    let mut has_where = false;
+
+    // Search condition
+    if let Some(ref sv) = filter.search_value {
+        if !sv.is_empty() {
+            let col = match filter.search_field.as_deref().unwrap_or("email") {
+                "name" => "LOWER(name)",
+                "role" => "LOWER(COALESCE(role, 'user'))",
+                _ => "LOWER(email)",
+            };
+            let pattern = match filter.search_operator.as_deref().unwrap_or("contains") {
+                "starts_with" => format!("{}%", sv.to_lowercase()),
+                "ends_with" => format!("%{}", sv.to_lowercase()),
+                _ => format!("%{}%", sv.to_lowercase()),
+            };
+            qb.push(" WHERE ");
+            has_where = true;
+            qb.push(col);
+            qb.push(" LIKE ");
+            qb.push_bind(pattern);
+        }
+    }
+
+    // Filter condition
+    if let Some(ref fv) = filter.filter_value {
+        let needle = fv.to_lowercase();
+        let field = filter.filter_field.as_deref().unwrap_or("email");
+        let op = filter.filter_operator.as_deref().unwrap_or("eq");
+
+        if has_where {
+            qb.push(" AND ");
+        } else {
+            qb.push(" WHERE ");
+        }
+
+        match field {
+            "banned" => {
+                let banned_bool: bool = needle == "true" || needle == "1";
+                if op == "ne" {
+                    qb.push("banned != ");
+                } else {
+                    qb.push("banned = ");
+                }
+                qb.push_bind(banned_bool);
+            }
+            "emailVerified" | "email_verified" => {
+                let ver_bool: bool = needle == "true" || needle == "1";
+                if op == "ne" {
+                    qb.push("email_verified != ");
+                } else {
+                    qb.push("email_verified = ");
+                }
+                qb.push_bind(ver_bool);
+            }
+            "name" => {
+                let col = "LOWER(name)";
+                match op {
+                    "ne" => {
+                        qb.push(col).push(" != ").push_bind(needle);
+                    }
+                    "contains" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}%"));
+                    }
+                    "starts_with" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("{needle}%"));
+                    }
+                    "ends_with" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}"));
+                    }
+                    _ => {
+                        qb.push(col).push(" = ").push_bind(needle);
+                    }
+                }
+            }
+            "role" => {
+                let col = "LOWER(COALESCE(role, 'user'))";
+                match op {
+                    "ne" => {
+                        qb.push(col).push(" != ").push_bind(needle);
+                    }
+                    "contains" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}%"));
+                    }
+                    "starts_with" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("{needle}%"));
+                    }
+                    "ends_with" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}"));
+                    }
+                    _ => {
+                        qb.push(col).push(" = ").push_bind(needle);
+                    }
+                }
+            }
+            "id" => {
+                if op == "ne" {
+                    qb.push("id != ").push_bind(needle);
+                } else {
+                    qb.push("id = ").push_bind(needle);
+                }
+            }
+            _ => {
+                let col = "LOWER(email)";
+                match op {
+                    "ne" => {
+                        qb.push(col).push(" != ").push_bind(needle);
+                    }
+                    "contains" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}%"));
+                    }
+                    "starts_with" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("{needle}%"));
+                    }
+                    "ends_with" => {
+                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}"));
+                    }
+                    _ => {
+                        qb.push(col).push(" = ").push_bind(needle);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -397,7 +526,52 @@ impl AuthAdapter for PostgresAuthAdapter {
     ) -> BoxFuture<'static, Result<(Vec<UserRecord>, usize), AdapterError>> {
         let pool = self.pool.clone();
         Box::pin(async move {
-            let rows = sqlx::query(r#"SELECT * FROM "user""#)
+            let mut count_qb = QueryBuilder::<sqlx::Postgres>::new(r#"SELECT COUNT(*) FROM "user""#);
+            apply_postgres_user_filters(&mut count_qb, &filter);
+            let total: i64 = count_qb
+                .build_query_scalar()
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            let mut qb = QueryBuilder::<sqlx::Postgres>::new(r#"SELECT * FROM "user""#);
+            apply_postgres_user_filters(&mut qb, &filter);
+
+            let sort_col = match filter.sort_by.as_deref().unwrap_or("createdAt") {
+                "name" => "LOWER(name)",
+                "email" => "email",
+                "role" => "COALESCE(role, 'user')",
+                "updatedAt" | "updated_at" => "updated_at",
+                _ => "created_at",
+            };
+            let sort_dir = if filter
+                .sort_direction
+                .as_deref()
+                .map(|d| d.eq_ignore_ascii_case("desc"))
+                .unwrap_or(false)
+            {
+                "DESC"
+            } else {
+                "ASC"
+            };
+            qb.push(" ORDER BY ");
+            qb.push(sort_col);
+            qb.push(" ");
+            qb.push(sort_dir);
+            qb.push(", id ");
+            qb.push(sort_dir);
+
+            if let Some(limit) = filter.limit {
+                qb.push(" LIMIT ");
+                qb.push_bind(limit as i64);
+            }
+            if let Some(offset) = filter.offset {
+                qb.push(" OFFSET ");
+                qb.push_bind(offset as i64);
+            }
+
+            let rows = qb
+                .build()
                 .fetch_all(&pool)
                 .await
                 .map_err(|e| AdapterError::Query(e.to_string()))?;
@@ -407,7 +581,7 @@ impl AuthAdapter for PostgresAuthAdapter {
                 .map(map_user_row)
                 .collect::<Result<Vec<_>, _>>()?;
 
-            Ok(filter_and_paginate_users(users, &filter))
+            Ok((users, total as usize))
         })
     }
 
@@ -415,11 +589,13 @@ impl AuthAdapter for PostgresAuthAdapter {
         let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
+            let mut tx = pool.begin().await.map_err(|e| AdapterError::Query(e.to_string()))?;
             sqlx::query(r#"DELETE FROM "user" WHERE id = $1"#)
                 .bind(id)
-                .execute(&pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| AdapterError::Query(e.to_string()))?;
+            tx.commit().await.map_err(|e| AdapterError::Query(e.to_string()))?;
             Ok(())
         })
     }

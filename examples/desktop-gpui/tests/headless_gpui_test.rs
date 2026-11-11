@@ -118,8 +118,13 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
     let app = app_entity.expect("DesktopAuthApp view should be mounted");
 
     // Let the initial restore_session task settle
-    cx.background_executor.run_until_parked();
-    cx.run_until_parked();
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cx.run_until_parked();
+        if app.read_with(cx, |view, _| view.store.status() != AuthStatus::Loading) {
+            break;
+        }
+    }
 
     // Verify initial unauthenticated state
     app.read_with(cx, |view, _| {

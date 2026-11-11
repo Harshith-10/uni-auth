@@ -4,15 +4,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 use auth_proto::{error_codes, AuthErrorResponse, RevokeSessionRequest};
-use crate::cookies::build_clear_session_cookie;
+use crate::error_to_response;
 use crate::extract::{extract_token_from_headers, CurrentSession};
 use crate::state::AuthState;
-
-fn error_to_response(err: auth_core::AuthError) -> Response {
-    let status_code = StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body = AuthErrorResponse::new(err.error_code(), err.to_string()).with_status(err.http_status());
-    (status_code, Json(body)).into_response()
-}
 
 pub async fn get_session(
     State(state): State<AuthState>,
@@ -43,14 +37,7 @@ pub async fn get_session(
 
     if !is_bearer && state.service.verify_signed_token(&token).is_none() {
         let mut response = (StatusCode::OK, Json(serde_json::Value::Null)).into_response();
-        let clear_cookie = build_clear_session_cookie(
-            &state.cookie_name,
-            state.secure_cookies,
-            &state.same_site,
-        );
-        if let Ok(cookie_val) = clear_cookie.parse() {
-            response.headers_mut().append(header::SET_COOKIE, cookie_val);
-        }
+        state.clear_session_cookie(&mut response);
         return response;
     }
 
@@ -67,14 +54,7 @@ pub async fn get_session(
         }
         Ok(None) | Err(_) => {
             let mut response = (StatusCode::OK, Json(serde_json::Value::Null)).into_response();
-            let clear_cookie = build_clear_session_cookie(
-                &state.cookie_name,
-                state.secure_cookies,
-                &state.same_site,
-            );
-            if let Ok(cookie_val) = clear_cookie.parse() {
-                response.headers_mut().append(header::SET_COOKIE, cookie_val);
-            }
+            state.clear_session_cookie(&mut response);
             response
         }
     }

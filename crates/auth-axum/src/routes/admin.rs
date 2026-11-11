@@ -10,19 +10,12 @@ use axum::Json;
 use auth_proto::{
     AdminBanUserRequest, AdminCreateUserRequest, AdminGetUserQuery, AdminHasPermissionRequest,
     AdminListUsersQuery, AdminRevokeUserSessionRequest, AdminSetRoleRequest,
-    AdminSetUserPasswordRequest, AdminUpdateUserRequest, AdminUserIdRequest, AuthErrorResponse,
+    AdminSetUserPasswordRequest, AdminUpdateUserRequest, AdminUserIdRequest,
 };
 use crate::cookies::{build_clear_session_cookie, build_session_cookie};
+use crate::error_to_response;
 use crate::extract::{extract_request_meta, CurrentSession};
 use crate::state::AuthState;
-
-fn error_to_response(err: auth_core::AuthError) -> Response {
-    let status_code =
-        StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body =
-        AuthErrorResponse::new(err.error_code(), err.to_string()).with_status(err.http_status());
-    (status_code, Json(body)).into_response()
-}
 
 fn admin_cookie_name(secure: bool) -> &'static str {
     if secure {
@@ -204,10 +197,9 @@ pub async fn impersonate_user(
         .await
     {
         Ok(res) => {
-            let signed_impersonated = state.service.sign_token(&res.session.token);
             let signed_admin = state.service.sign_token(&current_session.session.token);
 
-            let mut response = (StatusCode::OK, Json(res)).into_response();
+            let mut response = (StatusCode::OK, Json(res.clone())).into_response();
 
             // 1. Stash original admin session in `better-auth.admin_session` cookie and `set-admin-auth-token` header
             let admin_cookie = build_session_cookie(
@@ -227,23 +219,8 @@ pub async fn impersonate_user(
             }
 
             // 2. Set active session cookie and `set-auth-token` to the impersonated session
-            let session_cookie = build_session_cookie(
-                &state.cookie_name,
-                &signed_impersonated,
-                state
-                    .service
-                    .admin_config()
-                    .impersonation_session_duration
-                    .whole_seconds(),
-                state.secure_cookies,
-                &state.same_site,
-            );
-            if let Ok(c) = session_cookie.parse() {
-                response.headers_mut().append(header::SET_COOKIE, c);
-            }
-            if let Ok(tok) = signed_impersonated.parse() {
-                response.headers_mut().insert("set-auth-token", tok);
-            }
+            let duration = state.service.admin_config().impersonation_session_duration;
+            state.attach_session_cookie(&mut response, &res.session.token, true, Some(duration));
 
             response
         }
@@ -264,23 +241,10 @@ pub async fn stop_impersonating(
         .await
     {
         Ok(res) => {
-            let signed_admin = state.service.sign_token(&res.session.token);
-            let mut response = (StatusCode::OK, Json(res)).into_response();
+            let mut response = (StatusCode::OK, Json(res.clone())).into_response();
 
             // 1. Restore admin session cookie and `set-auth-token`
-            let session_cookie = build_session_cookie(
-                &state.cookie_name,
-                &signed_admin,
-                state.service.config().session_expires_in.whole_seconds(),
-                state.secure_cookies,
-                &state.same_site,
-            );
-            if let Ok(c) = session_cookie.parse() {
-                response.headers_mut().append(header::SET_COOKIE, c);
-            }
-            if let Ok(tok) = signed_admin.parse() {
-                response.headers_mut().insert("set-auth-token", tok);
-            }
+            state.attach_session_cookie(&mut response, &res.session.token, true, None);
 
             // 2. Expire `better-auth.admin_session` cookie
             let clear_admin = build_clear_session_cookie(

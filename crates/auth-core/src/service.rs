@@ -14,7 +14,7 @@ use auth_proto::{
     SendVerificationEmailRequest, SessionAndUserResponse, SessionWire, SignInEmailRequest,
     SignInResponse, SignOutRequest, SignOutResponse, SignUpEmailRequest, SignUpResponse,
     StatusMessageResponse, StatusResponse, UpdateUserRequest, UpdateUserResponse, UserWire,
-    VerifyEmailResponse,
+    VerifyEmailResponse, url_encode,
 };
 
 use crate::access::AdminConfig;
@@ -421,7 +421,7 @@ impl AuthService {
                 "{}/verify-email?token={}&callbackURL={}",
                 self.config.base_url,
                 token,
-                urlencoding_simple(callback_url)
+                url_encode(callback_url)
             );
 
             self.email_sender
@@ -711,7 +711,7 @@ impl AuthService {
 
             let redirect_param = req
                 .redirect_to
-                .map(|r| format!("?callbackURL={}", urlencoding_simple(&r)))
+                .map(|r| format!("?callbackURL={}", url_encode(&r)))
                 .unwrap_or_default();
 
             let reset_url = format!("{}/reset-password/{}{}", self.config.base_url, token, redirect_param);
@@ -986,7 +986,7 @@ impl AuthService {
                     "{}/verify-email?token={}&callbackURL={}",
                     self.config.base_url,
                     token,
-                    urlencoding_simple(callback_url)
+                    url_encode(callback_url)
                 );
 
                 let _ = self
@@ -2020,19 +2020,284 @@ impl AuthService {
             success,
         })
     }
-}
 
-fn urlencoding_simple(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push_str(&format!("%{:02X}", b));
+    /// `POST /api/auth/sign-in/social`
+    pub async fn begin_social_sign_in(
+        &self,
+        provider: &crate::oauth::OAuthProviderConfig,
+        payload: auth_proto::SignInSocialRequest,
+    ) -> Result<auth_proto::SignInSocialResponse, AuthError> {
+        let oauth_state = crypto::generate_random_token(32);
+        let code_verifier = crypto::generate_random_token(32);
+
+        use sha2::{Digest, Sha256};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
+
+        let state_data = crate::oauth::OAuthStateData {
+            code_verifier,
+            callback_url: payload.callback_url,
+            new_user_callback_url: payload.new_user_callback_url,
+            error_callback_url: payload.error_callback_url,
+            link_user_id: None,
+        };
+        let value = serde_json::to_string(&state_data)
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let expires_at = OffsetDateTime::now_utc() + Duration::minutes(10);
+        self.adapter
+            .create_verification(CreateVerificationInput {
+                id: None,
+                identifier: format!("auth-state:{oauth_state}"),
+                value,
+                expires_at,
+            })
+            .await?;
+
+        let callback_uri = format!("{}/callback/{}", self.config.base_url, provider.provider_id);
+        let scopes_str = provider.scopes.join(" ");
+
+        let mut auth_url = format!(
+            "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+            provider.auth_url,
+            provider.client_id,
+            auth_proto::url_encode(&callback_uri),
+            auth_proto::url_encode(&scopes_str),
+            oauth_state,
+            challenge
+        );
+        if let Some(ref hint) = payload.login_hint {
+            auth_url.push_str(&format!("&login_hint={}", auth_proto::url_encode(hint)));
+        }
+
+        let disable_redirect = payload.disable_redirect.unwrap_or(false);
+        Ok(auth_proto::SignInSocialResponse {
+            redirect: !disable_redirect,
+            url: auth_url,
+        })
+    }
+
+    /// `POST /api/auth/link-social`
+    pub async fn begin_link_social(
+        &self,
+        provider: &crate::oauth::OAuthProviderConfig,
+        user_id: &str,
+        payload: auth_proto::LinkSocialRequest,
+    ) -> Result<auth_proto::SignInSocialResponse, AuthError> {
+        let oauth_state = crypto::generate_random_token(32);
+        let code_verifier = crypto::generate_random_token(32);
+
+        use sha2::{Digest, Sha256};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
+
+        let state_data = crate::oauth::OAuthStateData {
+            code_verifier,
+            callback_url: payload.callback_url,
+            new_user_callback_url: None,
+            error_callback_url: payload.error_callback_url,
+            link_user_id: Some(user_id.to_string()),
+        };
+        let value = serde_json::to_string(&state_data)
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+        let expires_at = OffsetDateTime::now_utc() + Duration::minutes(10);
+        self.adapter
+            .create_verification(CreateVerificationInput {
+                id: None,
+                identifier: format!("auth-state:{oauth_state}"),
+                value,
+                expires_at,
+            })
+            .await?;
+
+        let callback_uri = format!("{}/callback/{}", self.config.base_url, provider.provider_id);
+        let mut scopes = provider.scopes.clone();
+        if let Some(extra) = payload.scopes {
+            for s in extra {
+                if !scopes.contains(&s) {
+                    scopes.push(s);
+                }
             }
         }
+        let scopes_str = scopes.join(" ");
+
+        let auth_url = format!(
+            "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+            provider.auth_url,
+            provider.client_id,
+            auth_proto::url_encode(&callback_uri),
+            auth_proto::url_encode(&scopes_str),
+            oauth_state,
+            challenge
+        );
+
+        let disable_redirect = payload.disable_redirect.unwrap_or(false);
+        Ok(auth_proto::SignInSocialResponse {
+            redirect: !disable_redirect,
+            url: auth_url,
+        })
     }
-    out
+
+    /// Consumes and validates the OAuth `state` verification record.
+    pub async fn consume_oauth_state(
+        &self,
+        oauth_state: &str,
+    ) -> Result<crate::oauth::OAuthStateData, AuthError> {
+        let primary_id = format!("auth-state:{oauth_state}");
+        let legacy_id = format!("oauth-state:{oauth_state}");
+        let record = match self.adapter.consume_verification(&primary_id).await? {
+            Some(r) => r,
+            None => match self.adapter.consume_verification(&legacy_id).await? {
+                Some(r) => r,
+                None => {
+                    return Err(AuthError::bad_request(
+                        "INVALID_STATE",
+                        "OAuth state not found or expired",
+                    ));
+                }
+            },
+        };
+
+        serde_json::from_str(&record.value).map_err(|e| {
+            AuthError::bad_request("INVALID_STATE", format!("Corrupted OAuth state payload: {e}"))
+        })
+    }
+
+    /// Completes the OAuth callback: links an account or signs in/signs up the user and issues a session.
+    pub async fn complete_oauth_callback(
+        &self,
+        provider_name: &str,
+        profile: crate::oauth::OAuthProfileResult,
+        link_user_id: Option<String>,
+        meta: RequestMeta,
+    ) -> Result<OAuthCallbackResult, AuthError> {
+        // Case 1: Account linking flow
+        if let Some(target_user_id) = link_user_id {
+            if let Some(existing_acc) = self.adapter.find_account(provider_name, &profile.account_id).await? {
+                if existing_acc.user_id != target_user_id {
+                    return Err(AuthError::SocialAccountAlreadyLinked);
+                }
+                self.adapter
+                    .update_account_tokens(
+                        provider_name,
+                        &profile.account_id,
+                        Some(profile.access_token),
+                        profile.refresh_token,
+                        profile.id_token,
+                        profile.access_token_expires_at,
+                        profile.scope,
+                    )
+                    .await?;
+            } else {
+                self.adapter
+                    .create_account(CreateAccountInput {
+                        id: None,
+                        user_id: target_user_id.clone(),
+                        account_id: profile.account_id,
+                        provider_id: provider_name.to_string(),
+                        access_token: Some(profile.access_token),
+                        refresh_token: profile.refresh_token,
+                        id_token: profile.id_token,
+                        access_token_expires_at: profile.access_token_expires_at,
+                        refresh_token_expires_at: None,
+                        scope: profile.scope,
+                        password: None,
+                    })
+                    .await?;
+            }
+            return Ok(OAuthCallbackResult::Linked { user_id: target_user_id });
+        }
+
+        // Case 2: Sign-in / sign-up flow
+        let mut is_new_user = false;
+        let user = if let Some(existing_acc) = self.adapter.find_account(provider_name, &profile.account_id).await? {
+            self.adapter
+                .update_account_tokens(
+                    provider_name,
+                    &profile.account_id,
+                    Some(profile.access_token),
+                    profile.refresh_token,
+                    profile.id_token,
+                    profile.access_token_expires_at,
+                    profile.scope,
+                )
+                .await?;
+
+            self.adapter
+                .find_user_by_id(&existing_acc.user_id)
+                .await?
+                .ok_or_else(|| AuthError::Internal("Linked user not found".to_string()))?
+        } else {
+            let user = match self.adapter.find_user_by_email(&profile.email).await? {
+                Some(mut existing) => {
+                    if !profile.email_verified {
+                        return Err(AuthError::EmailNotVerified);
+                    }
+                    if !existing.email_verified {
+                        self.adapter
+                            .update_user_email_verified(&existing.id, true)
+                            .await?;
+                        existing.email_verified = true;
+                    }
+                    existing
+                }
+                None => {
+                    is_new_user = true;
+                    let created = self
+                        .adapter
+                        .create_user(CreateUserInput {
+                            id: None,
+                            name: profile.name,
+                            email: profile.email.clone(),
+                            image: profile.image,
+                            email_verified: profile.email_verified,
+                        })
+                        .await?;
+                    self.notify_user_created(&created.to_wire()).await;
+                    created
+                }
+            };
+
+            self.adapter
+                .create_account(CreateAccountInput {
+                    id: None,
+                    user_id: user.id.clone(),
+                    account_id: profile.account_id,
+                    provider_id: provider_name.to_string(),
+                    access_token: Some(profile.access_token),
+                    refresh_token: profile.refresh_token,
+                    id_token: profile.id_token,
+                    access_token_expires_at: profile.access_token_expires_at,
+                    refresh_token_expires_at: None,
+                    scope: profile.scope,
+                    password: None,
+                })
+                .await?;
+
+            user
+        };
+
+        let session = self.issue_session_for_user(&user, meta, true).await?;
+        Ok(OAuthCallbackResult::Authenticated {
+            user,
+            session,
+            is_new_user,
+        })
+    }
+}
+
+/// Result of an OAuth callback handled by `AuthService::complete_oauth_callback`.
+#[derive(Debug, Clone)]
+pub enum OAuthCallbackResult {
+    /// Account linked to an existing authenticated user.
+    Linked { user_id: String },
+    /// User authenticated (either via existing account or new registration) and session issued.
+    Authenticated {
+        user: UserRecord,
+        session: SessionRecord,
+        is_new_user: bool,
+    },
 }

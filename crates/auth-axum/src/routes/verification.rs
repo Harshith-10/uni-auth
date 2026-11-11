@@ -1,19 +1,13 @@
 use axum::extract::{Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use serde::Deserialize;
 
-use auth_proto::{AuthErrorResponse, SendVerificationEmailRequest};
-use crate::cookies::build_session_cookie;
+use auth_proto::SendVerificationEmailRequest;
+use crate::error_to_response;
 use crate::extract::extract_request_meta;
 use crate::state::AuthState;
-
-fn error_to_response(err: auth_core::AuthError) -> Response {
-    let status_code = StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body = AuthErrorResponse::new(err.error_code(), err.to_string()).with_status(err.http_status());
-    (status_code, Json(body)).into_response()
-}
 
 pub async fn send_verification_email(
     State(state): State<AuthState>,
@@ -47,20 +41,7 @@ pub async fn verify_email(
             };
 
             if let Some(ref raw_token) = res.token {
-                let signed_token = state.service.sign_token(raw_token);
-                let cookie = build_session_cookie(
-                    &state.cookie_name,
-                    &signed_token,
-                    state.service.config().session_expires_in.whole_seconds(),
-                    state.secure_cookies,
-                    &state.same_site,
-                );
-                if let Ok(c) = cookie.parse() {
-                    response.headers_mut().append(header::SET_COOKIE, c);
-                }
-                if let Ok(tok) = signed_token.parse() {
-                    response.headers_mut().insert("set-auth-token", tok);
-                }
+                state.attach_session_cookie(&mut response, raw_token, true, None);
             }
 
             response

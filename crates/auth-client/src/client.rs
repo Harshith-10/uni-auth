@@ -85,7 +85,7 @@ impl BetterAuthNativeClient {
     fn handle_auth_token_header(&self, headers: &HeaderMap) -> bool {
         if let Some(token_header) = headers.get("set-auth-token") {
             if let Ok(token_str) = token_header.to_str() {
-                let token = decode_if_percent_encoded(token_str.trim());
+                let token = auth_proto::url_decode(token_str.trim());
                 if !token.is_empty() {
                     let _ = self.storage.set_token(&token);
                     return true;
@@ -803,38 +803,5 @@ impl BetterAuthNativeClient {
 
         let parsed: T = res.json().await?;
         Ok(parsed)
-    }
-}
-
-fn decode_if_percent_encoded(s: &str) -> String {
-    if s.contains('%') {
-        urlencoding_decode(s).unwrap_or_else(|| s.to_string())
-    } else {
-        s.to_string()
-    }
-}
-
-fn urlencoding_decode(s: &str) -> Option<String> {
-    let mut bytes = Vec::with_capacity(s.len());
-    let mut chars = s.bytes();
-    while let Some(b) = chars.next() {
-        if b == b'%' {
-            let h1 = chars.next()?;
-            let h2 = chars.next()?;
-            let val = hex_val(h1)? * 16 + hex_val(h2)?;
-            bytes.push(val);
-        } else {
-            bytes.push(b);
-        }
-    }
-    String::from_utf8(bytes).ok()
-}
-
-fn hex_val(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
     }
 }

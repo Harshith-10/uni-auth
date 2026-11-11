@@ -17,6 +17,7 @@ pub mod email;
 pub mod error;
 pub mod hooks;
 pub mod models;
+pub mod oauth;
 pub mod plugin;
 pub mod service;
 
@@ -28,5 +29,8 @@ pub use hooks::{
     spawn_expired_cleanup_worker, AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter,
 };
 pub use models::*;
+pub use oauth::{
+    OAuthHttpClient, OAuthProfileResult, OAuthProviderConfig, OAuthStateData, ReqwestOAuthClient,
+};
 pub use plugin::{AuthPlugin, TotpValidator};
-pub use service::{AuthConfig, AuthService};
+pub use service::{AuthConfig, AuthService, OAuthCallbackResult};

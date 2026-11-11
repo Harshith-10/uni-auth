@@ -335,7 +335,7 @@ pub fn sign_cookie_better_call(secret: &[u8], token: &str) -> String {
 /// 2. Upstream `@better-auth/utils/hmac` raw-secret `base64urlnopad` signatures, and
 /// 3. Upstream `better-call` raw-secret standard padded Base64 signatures (including URL-encoded `%3D`/`%2B`/`%2F`).
 pub fn verify_signature(secret: &[u8], token: &str, signature: &str) -> bool {
-    let decoded_sig = percent_decode_if_needed(signature);
+    let decoded_sig = auth_proto::url_decode(signature);
     let sig_bytes = decoded_sig.as_bytes();
 
     // 1. Check HKDF-derived key signature (uni-auth native)
@@ -362,27 +362,6 @@ pub fn verify_signature(secret: &[u8], token: &str, signature: &str) -> bool {
     };
 
     hkdf_matches || raw_matches
-}
-
-fn percent_decode_if_needed(input: &str) -> String {
-    if !input.contains('%') {
-        return input.to_string();
-    }
-    let mut out = Vec::with_capacity(input.len());
-    let mut bytes = input.bytes();
-    while let Some(b) = bytes.next() {
-        if b == b'%' {
-            let hi = bytes.next().and_then(hex_nibble);
-            let lo = bytes.next().and_then(hex_nibble);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h << 4) | l);
-                continue;
-            }
-            return input.to_string();
-        }
-        out.push(b);
-    }
-    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
 }
 
 /// Strictly verifies a signed `<token>.<signature>` string, rejecting any unsigned input.

@@ -1,20 +1,12 @@
 use axum::extract::State;
-use axum::http::{header, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
-use auth_proto::{AuthErrorResponse, DeleteUserRequest, UpdateUserRequest};
-use crate::cookies::build_clear_session_cookie;
+use auth_proto::{DeleteUserRequest, UpdateUserRequest};
+use crate::error_to_response;
 use crate::extract::CurrentSession;
 use crate::state::AuthState;
-
-fn error_to_response(err: auth_core::AuthError) -> Response {
-    let status_code =
-        StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body =
-        AuthErrorResponse::new(err.error_code(), err.to_string()).with_status(err.http_status());
-    (status_code, Json(body)).into_response()
-}
 
 /// `POST /api/auth/update-user`
 pub async fn update_user(
@@ -55,14 +47,7 @@ pub async fn delete_user(
     {
         Ok(res) => {
             let mut response = (StatusCode::OK, Json(res)).into_response();
-            let clear_cookie = build_clear_session_cookie(
-                &state.cookie_name,
-                state.secure_cookies,
-                &state.same_site,
-            );
-            if let Ok(cookie_val) = clear_cookie.parse() {
-                response.headers_mut().append(header::SET_COOKIE, cookie_val);
-            }
+            state.clear_session_cookie(&mut response);
             response
         }
         Err(err) => error_to_response(err),

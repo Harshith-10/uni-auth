@@ -9,12 +9,14 @@
 
 pub mod cookies;
 pub mod cors;
+pub mod error;
 pub mod extract;
 pub mod middleware;
 pub mod routes;
 pub mod state;
 
 pub use cors::build_auth_cors_layer;
+pub use error::*;
 pub use extract::{
     extract_request_meta, extract_token_from_headers, CurrentSession, FreshSession, OptionalSession,
 };

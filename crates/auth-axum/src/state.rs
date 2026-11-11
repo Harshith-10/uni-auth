@@ -4,49 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use auth_core::AuthService;
 
-/// Configuration for social OAuth providers (e.g., GitHub, Google).
-#[derive(Clone, Debug)]
-pub struct OAuthProviderConfig {
-    pub provider_id: String,
-    pub client_id: String,
-    pub client_secret: String,
-    pub auth_url: String,
-    pub token_url: String,
-    pub userinfo_url: String,
-    pub scopes: Vec<String>,
-}
-
-impl OAuthProviderConfig {
-    /// Standard GitHub OAuth2 configuration preset.
-    pub fn github(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
-        Self {
-            provider_id: "github".to_string(),
-            client_id: client_id.into(),
-            client_secret: client_secret.into(),
-            auth_url: "https://github.com/login/oauth/authorize".to_string(),
-            token_url: "https://github.com/login/oauth/access_token".to_string(),
-            userinfo_url: "https://api.github.com/user".to_string(),
-            scopes: vec!["read:user".to_string(), "user:email".to_string()],
-        }
-    }
-
-    /// Standard Google OpenID Connect / OAuth2 configuration preset.
-    pub fn google(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
-        Self {
-            provider_id: "google".to_string(),
-            client_id: client_id.into(),
-            client_secret: client_secret.into(),
-            auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
-            token_url: "https://oauth2.googleapis.com/token".to_string(),
-            userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo".to_string(),
-            scopes: vec![
-                "openid".to_string(),
-                "email".to_string(),
-                "profile".to_string(),
-            ],
-        }
-    }
-}
+pub use auth_core::{OAuthHttpClient, OAuthProviderConfig, ReqwestOAuthClient};
 
 /// Shared application state injected into Axum auth routes.
 #[derive(Clone)]
@@ -56,6 +14,7 @@ pub struct AuthState {
     pub secure_cookies: bool,
     pub same_site: String,
     pub oauth_providers: Arc<HashMap<String, OAuthProviderConfig>>,
+    pub oauth_http_client: Arc<dyn OAuthHttpClient>,
     pub trusted_origins: Arc<Vec<String>>,
 }
 
@@ -67,8 +26,14 @@ impl AuthState {
             secure_cookies: false, // Default false for local dev / tests, can be toggled
             same_site: "Lax".to_string(),
             oauth_providers: Arc::new(HashMap::new()),
+            oauth_http_client: Arc::new(ReqwestOAuthClient::new()),
             trusted_origins: Arc::new(Vec::new()),
         }
+    }
+
+    pub fn with_oauth_http_client(mut self, client: Arc<dyn OAuthHttpClient>) -> Self {
+        self.oauth_http_client = client;
+        self
     }
 
     pub fn with_secure_cookies(mut self, secure: bool) -> Self {
@@ -94,5 +59,50 @@ impl AuthState {
     {
         self.trusted_origins = Arc::new(origins.into_iter().map(Into::into).collect());
         self
+    }
+
+    /// Attaches the signed session cookie (and `set-auth-token` header) to an outgoing Response.
+    pub fn attach_session_cookie(
+        &self,
+        response: &mut axum::response::Response,
+        raw_token: &str,
+        remember_me: bool,
+        custom_duration: Option<time::Duration>,
+    ) {
+        let signed = self.service.sign_cookie_token(raw_token);
+        let max_age = if remember_me {
+            Some(
+                custom_duration
+                    .unwrap_or_else(|| self.service.config().session_expires_in)
+                    .whole_seconds(),
+            )
+        } else {
+            None
+        };
+        let cookie = crate::cookies::build_session_cookie_with_options(
+            &self.cookie_name,
+            &signed,
+            max_age,
+            self.secure_cookies,
+            &self.same_site,
+        );
+        if let Ok(val) = cookie.parse() {
+            response.headers_mut().append(axum::http::header::SET_COOKIE, val);
+        }
+        if let Ok(val) = signed.parse() {
+            response.headers_mut().insert("set-auth-token", val);
+        }
+    }
+
+    /// Attaches the cleared session cookie to an outgoing Response.
+    pub fn clear_session_cookie(&self, response: &mut axum::response::Response) {
+        let clear = crate::cookies::build_clear_session_cookie(
+            &self.cookie_name,
+            self.secure_cookies,
+            &self.same_site,
+        );
+        if let Ok(val) = clear.parse() {
+            response.headers_mut().append(axum::http::header::SET_COOKIE, val);
+        }
     }
 }

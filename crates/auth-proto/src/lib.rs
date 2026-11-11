@@ -11,8 +11,10 @@ pub mod error;
 pub mod models;
 pub mod requests;
 pub mod responses;
+pub mod url_utils;
 
 pub use error::*;
 pub use models::*;
 pub use requests::*;
 pub use responses::*;
+pub use url_utils::*;
