@@ -4,6 +4,7 @@ use auth_proto::{SessionAndUserResponse, SessionWire, UserWire};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::client::{BetterAuthNativeClient, ClientError};
+use crate::plugin::SessionSignalEvent;
 
 /// Reactive state of the current user session.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -35,13 +36,104 @@ pub struct AuthStore {
 }
 
 impl AuthStore {
-    /// Creates a new `AuthStore` wrapping the native client.
+    /// Creates a new `AuthStore` wrapping the native client, automatically subscribing to reactive session signals.
     pub fn new(client: Arc<BetterAuthNativeClient>) -> Self {
-        Self {
-            client,
+        let store = Self {
+            client: client.clone(),
             status: Arc::new(RwLock::new(AuthStatus::Loading)),
             listeners: Arc::new(Mutex::new(Vec::new())),
-        }
+        };
+
+        let weak_status = Arc::downgrade(&store.status);
+        let weak_listeners = Arc::downgrade(&store.listeners);
+        let client_clone = client.clone();
+
+        client.subscribe_session_events(move |event| {
+            let Some(status_lock) = weak_status.upgrade() else {
+                return;
+            };
+            let Some(listeners_lock) = weak_listeners.upgrade() else {
+                return;
+            };
+
+            let new_status_opt = match event {
+                SessionSignalEvent::SessionUpdated { user, session } => {
+                    Some(AuthStatus::Authenticated {
+                        user: user.clone(),
+                        session: session.clone(),
+                    })
+                }
+                SessionSignalEvent::UserUpdated(new_user) => {
+                    let mut current = status_lock.read().map(|s| s.clone()).unwrap_or_default();
+                    if let AuthStatus::Authenticated { ref mut user, .. } = current {
+                        *user = new_user.clone();
+                        Some(current)
+                    } else {
+                        None
+                    }
+                }
+                SessionSignalEvent::SignedOut => Some(AuthStatus::Unauthenticated),
+                SessionSignalEvent::NeedsRefresh => {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        let client = client_clone.clone();
+                        let weak_st = Arc::downgrade(&status_lock);
+                        let weak_ls = Arc::downgrade(&listeners_lock);
+                        handle.spawn(async move {
+                            if let Ok(Some(ses)) = client.get_session().await {
+                                if let Some(st) = weak_st.upgrade() {
+                                    let new_st = AuthStatus::Authenticated {
+                                        user: ses.user,
+                                        session: ses.session,
+                                    };
+                                    let changed = if let Ok(mut g) = st.write() {
+                                        if *g != new_st {
+                                            *g = new_st.clone();
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    };
+                                    if changed {
+                                        if let Some(ls) = weak_ls.upgrade() {
+                                            if let Ok(listeners) = ls.lock() {
+                                                for l in listeners.iter() {
+                                                    l(&new_st);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    None
+                }
+            };
+
+            if let Some(new_status) = new_status_opt {
+                let changed = if let Ok(mut s) = status_lock.write() {
+                    if *s != new_status {
+                        *s = new_status.clone();
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if changed {
+                    if let Ok(listeners) = listeners_lock.lock() {
+                        for listener in listeners.iter() {
+                            listener(&new_status);
+                        }
+                    }
+                }
+            }
+        });
+
+        store
     }
 
     pub fn client(&self) -> &Arc<BetterAuthNativeClient> {
@@ -64,12 +156,21 @@ impl AuthStore {
     }
 
     fn set_status(&self, new_status: AuthStatus) {
-        if let Ok(mut status) = self.status.write() {
-            *status = new_status.clone();
-        }
-        if let Ok(listeners) = self.listeners.lock() {
-            for listener in listeners.iter() {
-                listener(&new_status);
+        let changed = if let Ok(mut status) = self.status.write() {
+            if *status != new_status {
+                *status = new_status.clone();
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if changed {
+            if let Ok(listeners) = self.listeners.lock() {
+                for listener in listeners.iter() {
+                    listener(&new_status);
+                }
             }
         }
     }

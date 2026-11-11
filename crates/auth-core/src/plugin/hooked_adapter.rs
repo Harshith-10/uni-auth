@@ -9,10 +9,10 @@ use crate::adapter::{AuthAdapter, BoxFuture};
 use crate::error::{AdapterError, AuthError};
 use crate::models::{
     AccountRecord, AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput,
-    CreateSessionInput, CreateUserInput, CreateVerificationInput, SessionRecord, UserRecord,
-    VerificationRecord,
+    CreateSessionInput, CreateUserInput, CreateVerificationInput, SessionRecord, UpdateUserFields,
+    UserRecord, VerificationRecord,
 };
-use crate::plugin::{DatabaseHooks, HookOutcome, UserUpdatePatch};
+use crate::plugin::{DatabaseHooks, HookOutcome};
 
 /// Decorator around `Arc<dyn AuthAdapter>` executing lifecycle hooks before and after mutations.
 pub struct HookedAdapter {
@@ -89,117 +89,10 @@ impl AuthAdapter for HookedAdapter {
         self.inner.find_user_by_email(email)
     }
 
-    fn update_user_email_verified(
+    fn update_user(
         &self,
         id: &str,
-        verified: bool,
-    ) -> BoxFuture<'static, Result<(), AdapterError>> {
-        let inner = self.inner.clone();
-        let hooks = self.hooks.clone();
-        let user_id = id.to_string();
-        Box::pin(async move {
-            let mut current_verified = verified;
-            for hook in &hooks {
-                match hook
-                    .before_update_user(
-                        &user_id,
-                        UserUpdatePatch::EmailVerified(current_verified),
-                        &*inner,
-                    )
-                    .await
-                {
-                    Ok(HookOutcome::Continue(UserUpdatePatch::EmailVerified(v)))
-                    | Ok(HookOutcome::Modified(UserUpdatePatch::EmailVerified(v))) => {
-                        current_verified = v;
-                    }
-                    Ok(HookOutcome::Cancel) => return Ok(()),
-                    Ok(_) => {}
-                    Err(err) => return Err(AdapterError::Auth(Box::new(err))),
-                }
-            }
-
-            inner
-                .update_user_email_verified(&user_id, current_verified)
-                .await?;
-
-            if !hooks.is_empty() {
-                if let Ok(Some(user)) = inner.find_user_by_id(&user_id).await {
-                    for hook in &hooks {
-                        if let Err(err) = hook.after_update_user(&user, &*inner).await {
-                            return Err(AdapterError::Auth(Box::new(err)));
-                        }
-                    }
-                }
-            }
-
-            Ok(())
-        })
-    }
-
-    fn update_user_profile(
-        &self,
-        id: &str,
-        name: Option<String>,
-        image: Option<Option<String>>,
-    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
-        let inner = self.inner.clone();
-        let hooks = self.hooks.clone();
-        let user_id = id.to_string();
-        Box::pin(async move {
-            let mut cur_name = name;
-            let mut cur_image = image;
-            for hook in &hooks {
-                match hook
-                    .before_update_user(
-                        &user_id,
-                        UserUpdatePatch::Profile {
-                            name: cur_name.clone(),
-                            image: cur_image.clone(),
-                        },
-                        &*inner,
-                    )
-                    .await
-                {
-                    Ok(HookOutcome::Continue(UserUpdatePatch::Profile {
-                        name: n,
-                        image: img,
-                    }))
-                    | Ok(HookOutcome::Modified(UserUpdatePatch::Profile {
-                        name: n,
-                        image: img,
-                    })) => {
-                        cur_name = n;
-                        cur_image = img;
-                    }
-                    Ok(HookOutcome::Cancel) => {
-                        return inner
-                            .find_user_by_id(&user_id)
-                            .await?
-                            .ok_or(AdapterError::NotFound);
-                    }
-                    Ok(_) => {}
-                    Err(err) => return Err(AdapterError::Auth(Box::new(err))),
-                }
-            }
-
-            let user = inner
-                .update_user_profile(&user_id, cur_name, cur_image)
-                .await?;
-
-            for hook in &hooks {
-                if let Err(err) = hook.after_update_user(&user, &*inner).await {
-                    return Err(AdapterError::Auth(Box::new(err)));
-                }
-            }
-
-            Ok(user)
-        })
-    }
-
-    fn update_user_admin(
-        &self,
-        id: &str,
-        fields: AdminUpdateUserFields,
+        fields: UpdateUserFields,
     ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
         let inner = self.inner.clone();
         let hooks = self.hooks.clone();
@@ -208,15 +101,10 @@ impl AuthAdapter for HookedAdapter {
             let mut cur_fields = fields;
             for hook in &hooks {
                 match hook
-                    .before_update_user(
-                        &user_id,
-                        UserUpdatePatch::Admin(cur_fields.clone()),
-                        &*inner,
-                    )
+                    .before_update_user(&user_id, cur_fields.clone(), &*inner)
                     .await
                 {
-                    Ok(HookOutcome::Continue(UserUpdatePatch::Admin(f)))
-                    | Ok(HookOutcome::Modified(UserUpdatePatch::Admin(f))) => {
+                    Ok(HookOutcome::Continue(f)) | Ok(HookOutcome::Modified(f)) => {
                         cur_fields = f;
                     }
                     Ok(HookOutcome::Cancel) => {
@@ -225,12 +113,11 @@ impl AuthAdapter for HookedAdapter {
                             .await?
                             .ok_or(AdapterError::NotFound);
                     }
-                    Ok(_) => {}
                     Err(err) => return Err(AdapterError::Auth(Box::new(err))),
                 }
             }
 
-            let user = inner.update_user_admin(&user_id, cur_fields).await?;
+            let user = inner.update_user(&user_id, cur_fields).await?;
 
             for hook in &hooks {
                 if let Err(err) = hook.after_update_user(&user, &*inner).await {
@@ -240,6 +127,45 @@ impl AuthAdapter for HookedAdapter {
 
             Ok(user)
         })
+    }
+
+    fn update_user_email_verified(
+        &self,
+        id: &str,
+        verified: bool,
+    ) -> BoxFuture<'static, Result<(), AdapterError>> {
+        let fut = self.update_user(
+            id,
+            UpdateUserFields {
+                email_verified: Some(verified),
+                ..Default::default()
+            },
+        );
+        Box::pin(async move { fut.await.map(|_| ()) })
+    }
+
+    fn update_user_profile(
+        &self,
+        id: &str,
+        name: Option<String>,
+        image: Option<Option<String>>,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        self.update_user(
+            id,
+            UpdateUserFields {
+                name,
+                image,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn update_user_admin(
+        &self,
+        id: &str,
+        fields: AdminUpdateUserFields,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        self.update_user(id, fields)
     }
 
     fn list_users(
@@ -464,7 +390,28 @@ impl AuthAdapter for HookedAdapter {
         &self,
         user_id: &str,
     ) -> BoxFuture<'static, Result<(), AdapterError>> {
-        self.inner.delete_sessions_by_user_id(user_id)
+        let inner = self.inner.clone();
+        let hooks = self.hooks.clone();
+        let uid = user_id.to_string();
+        Box::pin(async move {
+            if !hooks.is_empty() {
+                if let Ok(sessions) = inner.list_sessions_by_user_id(&uid).await {
+                    for s in &sessions {
+                        for hook in &hooks {
+                            let _ = hook.before_delete_session(&s.token, &*inner).await;
+                        }
+                    }
+                    inner.delete_sessions_by_user_id(&uid).await?;
+                    for s in &sessions {
+                        for hook in &hooks {
+                            let _ = hook.after_delete_session(&s.token, &*inner).await;
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+            inner.delete_sessions_by_user_id(&uid).await
+        })
     }
 
     fn delete_other_sessions(
@@ -472,7 +419,33 @@ impl AuthAdapter for HookedAdapter {
         user_id: &str,
         current_token: &str,
     ) -> BoxFuture<'static, Result<(), AdapterError>> {
-        self.inner.delete_other_sessions(user_id, current_token)
+        let inner = self.inner.clone();
+        let hooks = self.hooks.clone();
+        let uid = user_id.to_string();
+        let cur_tok = current_token.to_string();
+        Box::pin(async move {
+            if !hooks.is_empty() {
+                if let Ok(sessions) = inner.list_sessions_by_user_id(&uid).await {
+                    let targets: Vec<_> = sessions
+                        .into_iter()
+                        .filter(|s| s.token != cur_tok)
+                        .collect();
+                    for s in &targets {
+                        for hook in &hooks {
+                            let _ = hook.before_delete_session(&s.token, &*inner).await;
+                        }
+                    }
+                    inner.delete_other_sessions(&uid, &cur_tok).await?;
+                    for s in &targets {
+                        for hook in &hooks {
+                            let _ = hook.after_delete_session(&s.token, &*inner).await;
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+            inner.delete_other_sessions(&uid, &cur_tok).await
+        })
     }
 
     fn delete_expired_sessions(&self) -> BoxFuture<'static, Result<usize, AdapterError>> {

@@ -1,10 +1,15 @@
 //! Shared state for the Axum Better Auth router.
 
 use auth_core::AuthService;
+use auth_core::models::{SessionRecord, UserRecord};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 pub use auth_core::{OAuthHttpClient, OAuthProviderConfig, ReqwestOAuthClient};
+
+/// Response extension carrying a newly issued session for `after_endpoint` plugin hooks.
+#[derive(Clone, Debug)]
+pub struct NewSessionExt(pub SessionRecord, pub UserRecord);
 
 /// Shared application state injected into Axum auth routes.
 #[derive(Clone)]

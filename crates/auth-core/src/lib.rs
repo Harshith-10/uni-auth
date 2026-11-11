@@ -30,10 +30,12 @@ pub use models::*;
 pub use oauth::{
     OAuthHttpClient, OAuthProfileResult, OAuthProviderConfig, OAuthStateData, ReqwestOAuthClient,
 };
+#[allow(deprecated)]
+pub use plugin::AuthPlugin;
 pub use plugin::{
-    AdminPlugin, AdminService, AdminServiceExt, AuthPlugin, BearerConfig, BearerPlugin,
-    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookOutcome, HookedAdapter,
-    OneTimeTokenConfig, OneTimeTokenPlugin, OneTimeTokenServiceExt, OttStoreTokenMode,
-    PluginMigration, PluginRateLimitRule, PluginRegistry, TotpValidator, UserUpdatePatch,
+    AdminPlugin, AdminService, AdminServiceExt, BearerConfig, BearerPlugin, BetterAuthPlugin,
+    DatabaseHooks, EndpointHookContext, HookOutcome, HookedAdapter, OneTimeTokenConfig,
+    OneTimeTokenPlugin, OneTimeTokenServiceExt, OttStoreTokenMode, PluginMigration,
+    PluginRateLimitRule, PluginRegistry, TotpValidator, UserUpdatePatch,
 };
 pub use service::{AuthConfig, AuthService, OAuthCallbackResult};

@@ -4,11 +4,29 @@
 
 use std::any::Any;
 
+use auth_proto::{SessionWire, UserWire};
+
 use crate::client::ClientError;
 use crate::transport::{ClientRequestContext, ClientResponseContext};
 
 /// Reactive session signal name triggering automatic state refreshes across client stores and UI subscribers.
 pub const SESSION_SIGNAL: &str = "$sessionSignal";
+
+/// Session mutation events emitted over the client's reactive signal system.
+#[derive(Debug, Clone)]
+pub enum SessionSignalEvent {
+    /// Session was explicitly established or replaced (e.g. impersonate-user, stop-impersonating, one-time-token/verify)
+    SessionUpdated {
+        user: UserWire,
+        session: SessionWire,
+    },
+    /// User profile was updated in-place (e.g. /update-user)
+    UserUpdated(UserWire),
+    /// Session was cleared (e.g. /sign-out, /delete-user)
+    SignedOut,
+    /// Session state changed and should be refreshed from server (e.g. /sign-in/email, /revoke-sessions)
+    NeedsRefresh,
+}
 
 /// Reactive atom/signal listener rule (`packages/core/src/types/plugin-client.ts:31-35`).
 #[derive(Clone)]

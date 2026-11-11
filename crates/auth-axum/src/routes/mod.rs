@@ -61,15 +61,6 @@ where
             post(verification::send_verification_email),
         )
         .route("/verify-email", get(verification::verify_email))
-        // One-Time Token Plugin
-        .route(
-            "/one-time-token/generate",
-            get(one_time_token::generate_one_time_token),
-        )
-        .route(
-            "/one-time-token/verify",
-            post(one_time_token::verify_one_time_token),
-        )
         // Social OAuth & Accounts
         .route("/sign-in/social", post(social::sign_in_social))
         .route("/link-social", post(social::link_social))
@@ -82,12 +73,20 @@ where
 pub fn auth_routes_with_plugins(state: &AuthState) -> Router<AuthState> {
     let mut router = auth_routes::<AuthState>();
 
-    // Dynamically mount AdminPlugin router if registered on AuthService and not already in axum_plugins
     let mut plugins: Vec<std::sync::Arc<dyn crate::plugin::AxumAuthPlugin>> =
         (*state.axum_plugins).clone();
+
+    // Dynamically mount AdminPlugin router if registered on AuthService and not already in axum_plugins
     if let Some(admin_plugin) = state.service.get_plugin::<auth_core::AdminPlugin>() {
         if !plugins.iter().any(|p| p.plugin_id() == "admin") {
             plugins.push(std::sync::Arc::new(admin_plugin.clone()));
+        }
+    }
+
+    // Dynamically mount OneTimeTokenPlugin router if registered on AuthService and not already in axum_plugins
+    if let Some(ott_plugin) = state.service.get_plugin::<auth_core::OneTimeTokenPlugin>() {
+        if !plugins.iter().any(|p| p.plugin_id() == "one-time-token") {
+            plugins.push(std::sync::Arc::new(ott_plugin.clone()));
         }
     }
 
@@ -99,16 +98,14 @@ pub fn auth_routes_with_plugins(state: &AuthState) -> Router<AuthState> {
             router = router.merge(plugin.router());
         }
     }
-    router
+
+    router.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::plugin::endpoint_hooks_middleware,
+    ))
 }
 
 /// Constructs a self-contained auth router with `AuthState` applied, including plugins and endpoint hooks (state: `()`).
 pub fn auth_router(state: AuthState) -> Router {
-    let router = auth_routes_with_plugins(&state);
-    router
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::plugin::endpoint_hooks_middleware,
-        ))
-        .with_state(state)
+    auth_routes_with_plugins(&state).with_state(state)
 }

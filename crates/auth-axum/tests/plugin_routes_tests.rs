@@ -183,3 +183,82 @@ fn test_check_endpoint_conflicts_detection() {
     assert!(err_msg.contains("Endpoint conflict"));
     assert!(err_msg.contains("/duplicate/path"));
 }
+
+#[test]
+fn test_validate_callback_url_hygiene() {
+    use auth_axum::middleware::validate_callback_url;
+
+    let trusted = vec![
+        "http://localhost:3000".to_string(),
+        "https://myapp.com".to_string(),
+    ];
+
+    // Relative URLs should always be allowed
+    assert!(validate_callback_url("/dashboard", &trusted).is_ok());
+    assert!(validate_callback_url("/auth/callback?code=123", &trusted).is_ok());
+    assert!(validate_callback_url("/", &trusted).is_ok());
+
+    // Trusted absolute origins should be allowed
+    assert!(validate_callback_url("http://localhost:3000/dashboard", &trusted).is_ok());
+    assert!(validate_callback_url("https://myapp.com/welcome", &trusted).is_ok());
+
+    // Untrusted origins must be rejected
+    assert!(validate_callback_url("http://evil.com/steal", &trusted).is_err());
+    assert!(validate_callback_url("https://attacker.org/leak", &trusted).is_err());
+
+    // Dangerous protocols & scheme variations must be rejected
+    assert!(validate_callback_url("javascript:alert(1)", &trusted).is_err());
+    assert!(validate_callback_url("data:text/html,<h1>pwn</h1>", &trusted).is_err());
+    assert!(validate_callback_url("//evil.com/steal", &trusted).is_err());
+}
+
+#[tokio::test]
+async fn test_auto_mounted_one_time_token_routes() {
+    use auth_axum::routes::auth_routes_with_plugins;
+
+    let adapter = Arc::new(InMemoryAuthAdapter::new());
+    let config = AuthConfig {
+        secret: b"test-secret-with-sufficient-length-32".to_vec(),
+        base_url: "http://localhost:3000/api/auth".to_string(),
+        session_expires_in: time::Duration::days(7),
+        ott_expires_in: time::Duration::minutes(3),
+        reset_password_expires_in: time::Duration::hours(1),
+        verify_email_expires_in: time::Duration::hours(24),
+        auto_sign_in: true,
+        require_email_verification: false,
+        min_password_length: 8,
+        max_password_length: 128,
+        delete_user_enabled: true,
+        defer_session_refresh: false,
+    };
+
+    let service = Arc::new(AuthService::new(config, adapter));
+    let state = AuthState::new(Arc::clone(&service));
+
+    // Router with plugins should auto-mount OTT routes
+    let app = auth_routes_with_plugins(&state).with_state(state);
+
+    // 1. Hit /one-time-token/generate without session -> Unauthorized 401
+    let req = Request::builder()
+        .method("GET")
+        .uri("/one-time-token/generate")
+        .header("content-type", "application/json")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    // Endpoint exists (not 404), returns 401 Unauthorized because session is missing
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // 2. Hit /one-time-token/verify with invalid token -> 400 or 401
+    let req = Request::builder()
+        .method("POST")
+        .uri("/one-time-token/verify")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"token": "invalid_ott_token"}"#))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    // Endpoint exists (not 404)
+    assert!(res.status() == StatusCode::BAD_REQUEST || res.status() == StatusCode::UNAUTHORIZED);
+}

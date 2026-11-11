@@ -4,8 +4,9 @@ use time::{Duration, OffsetDateTime};
 use auth_core::adapter::AuthAdapter;
 use auth_core::models::{
     AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput, CreateSessionInput,
-    CreateUserInput, CreateVerificationInput,
+    CreateUserInput, CreateVerificationInput, UpdateUserFields,
 };
+use auth_core::plugin::PluginMigration;
 use auth_core::{AuthConfig, AuthService};
 use auth_proto::{SignInEmailRequest, SignUpEmailRequest};
 use auth_sqlx::SqliteAuthAdapter;
@@ -453,4 +454,114 @@ async fn test_sqlite_list_users_parameterized_query_builder() {
     // 5. Delete user transaction verification
     adapter.delete_user(&u1.id).await.unwrap();
     assert!(adapter.find_user_by_id(&u1.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_sqlite_plugin_migrations() {
+    let adapter = SqliteAuthAdapter::new_in_memory()
+        .await
+        .expect("In-memory SQLite should initialize");
+
+    let migration = PluginMigration {
+        plugin_id: "test_plugin",
+        sqlite_ddl: &[
+            "CREATE TABLE IF NOT EXISTS test_plugin_table (id TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        ],
+        postgres_ddl: &[
+            "CREATE TABLE IF NOT EXISTS test_plugin_table (id TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        ],
+    };
+
+    adapter
+        .run_plugin_migrations(&[migration])
+        .await
+        .expect("Plugin migration should succeed");
+}
+
+#[tokio::test]
+async fn test_sqlite_like_wildcard_escaping() {
+    let adapter = SqliteAuthAdapter::new_in_memory()
+        .await
+        .expect("In-memory SQLite should initialize");
+
+    // Create user with literal % in name and user with regular name
+    adapter
+        .create_user(CreateUserInput {
+            id: None,
+            name: "100% Guaranteed".to_string(),
+            email: "percent@example.com".to_string(),
+            image: None,
+            email_verified: true,
+            role: None,
+        })
+        .await
+        .unwrap();
+
+    adapter
+        .create_user(CreateUserInput {
+            id: None,
+            name: "1000 Regular".to_string(),
+            email: "regular@example.com".to_string(),
+            image: None,
+            email_verified: true,
+            role: None,
+        })
+        .await
+        .unwrap();
+
+    // Searching for "%" with contains operator should match only the literal "100% Guaranteed", NOT all users!
+    let (res, total) = adapter
+        .list_users(AdminListUsersFilter {
+            search_field: Some("name".to_string()),
+            search_value: Some("%".to_string()),
+            search_operator: Some("contains".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(total, 1);
+    assert_eq!(res.len(), 1);
+    assert_eq!(res[0].name, "100% Guaranteed");
+}
+
+#[tokio::test]
+async fn test_sqlite_unified_update_user() {
+    let adapter = SqliteAuthAdapter::new_in_memory()
+        .await
+        .expect("In-memory SQLite should initialize");
+
+    let user = adapter
+        .create_user(CreateUserInput {
+            id: None,
+            name: "Sqlite Initial".to_string(),
+            email: "sqlite_init@example.com".to_string(),
+            image: None,
+            email_verified: false,
+            role: Some("user".to_string()),
+        })
+        .await
+        .unwrap();
+
+    let patch = UpdateUserFields {
+        name: Some("Sqlite Mutated".to_string()),
+        email: None,
+        image: Some(Some("https://cdn.example.com/pic.png".to_string())),
+        email_verified: Some(true),
+        role: Some("admin".to_string()),
+        banned: Some(true),
+        ban_reason: Some(Some("Terms violation".to_string())),
+        ban_expires: None,
+    };
+
+    let updated = adapter.update_user(&user.id, patch).await.unwrap();
+    assert_eq!(updated.name, "Sqlite Mutated");
+    assert_eq!(
+        updated.image.as_deref(),
+        Some("https://cdn.example.com/pic.png")
+    );
+    assert!(updated.email_verified);
+    assert_eq!(updated.role.as_deref(), Some("admin"));
+    assert!(updated.banned);
+    assert_eq!(updated.ban_reason.as_deref(), Some("Terms violation"));
 }

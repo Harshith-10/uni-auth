@@ -1,7 +1,38 @@
 //! Security middleware utilities for CSRF Origin validation and rate limiting.
 
 use auth_core::AuthError;
+use auth_proto::error_codes;
 use axum::http::HeaderMap;
+
+/// Validates that a callback URL is either a relative path (`/dashboard`)
+/// or starts with one of the configured `trusted_origins` (when `trusted_origins` is non-empty).
+pub fn validate_callback_url(url: &str, trusted_origins: &[String]) -> Result<(), AuthError> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    // Relative paths starting with a single '/' (not protocol-relative '//') are always safe
+    if trimmed.starts_with('/') && !trimmed.starts_with("//") {
+        return Ok(());
+    }
+    if trusted_origins.is_empty() {
+        return Ok(());
+    }
+    let allowed = trusted_origins.iter().any(|trusted| {
+        let base = trusted.trim().trim_end_matches('/');
+        trimmed.len() >= base.len()
+            && trimmed[..base.len()].eq_ignore_ascii_case(base)
+            && (trimmed.len() == base.len()
+                || matches!(trimmed.as_bytes()[base.len()], b'/' | b'?' | b'#'))
+    });
+    if !allowed {
+        return Err(AuthError::forbidden(
+            error_codes::INVALID_CALLBACK_URL,
+            "Invalid callbackURL",
+        ));
+    }
+    Ok(())
+}
 
 /// Validates the `Origin` (or `Referer`) header against a list of trusted origins.
 ///

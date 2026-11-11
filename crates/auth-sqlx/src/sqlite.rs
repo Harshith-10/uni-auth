@@ -12,10 +12,10 @@ use uuid::Uuid;
 use auth_core::adapter::{AuthAdapter, BoxFuture};
 use auth_core::error::AdapterError;
 use auth_core::models::{
-    AccountRecord, AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput,
-    CreateSessionInput, CreateUserInput, CreateVerificationInput, SessionRecord, UserRecord,
-    VerificationRecord,
+    AccountRecord, AdminListUsersFilter, CreateAccountInput, CreateSessionInput, CreateUserInput,
+    CreateVerificationInput, SessionRecord, UpdateUserFields, UserRecord, VerificationRecord,
 };
+use auth_core::plugin::PluginMigration;
 
 const SQLITE_SCHEMA: &str = include_str!("../migrations/sqlite.sql");
 
@@ -232,6 +232,35 @@ impl SqliteAuthAdapter {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// Applies declarative DDL migrations for all registered plugins.
+    /// Ignores benign "duplicate column name" errors on SQLite `ALTER TABLE ADD COLUMN`.
+    pub async fn run_plugin_migrations(
+        &self,
+        migrations: &[PluginMigration],
+    ) -> Result<(), AdapterError> {
+        for migration in migrations {
+            for stmt in migration.sqlite_ddl {
+                if let Err(err) = sqlx::query(stmt).execute(&self.pool).await {
+                    let msg = err.to_string();
+                    if !msg.to_lowercase().contains("duplicate column name") {
+                        return Err(AdapterError::Query(format!(
+                            "Plugin '{}' migration failed: {msg}",
+                            migration.plugin_id
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn escape_like(s: &str) -> String {
+    s.to_lowercase()
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn apply_sqlite_user_filters(
@@ -248,16 +277,18 @@ fn apply_sqlite_user_filters(
                 "role" => "LOWER(COALESCE(role, 'user'))",
                 _ => "LOWER(email)",
             };
+            let escaped = escape_like(sv);
             let pattern = match filter.search_operator.as_deref().unwrap_or("contains") {
-                "starts_with" => format!("{}%", sv.to_lowercase()),
-                "ends_with" => format!("%{}", sv.to_lowercase()),
-                _ => format!("%{}%", sv.to_lowercase()),
+                "starts_with" => format!("{escaped}%"),
+                "ends_with" => format!("%{escaped}"),
+                _ => format!("%{escaped}%"),
             };
             qb.push(" WHERE ");
             has_where = true;
             qb.push(col);
             qb.push(" LIKE ");
             qb.push_bind(pattern);
+            qb.push(" ESCAPE '\\'");
         }
     }
 
@@ -302,18 +333,28 @@ fn apply_sqlite_user_filters(
             }
             "name" => {
                 let col = "LOWER(name)";
+                let escaped = escape_like(&needle);
                 match op {
                     "ne" => {
                         qb.push(col).push(" != ").push_bind(needle);
                     }
                     "contains" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}%"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("%{escaped}%"))
+                            .push(" ESCAPE '\\'");
                     }
                     "starts_with" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("{needle}%"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("{escaped}%"))
+                            .push(" ESCAPE '\\'");
                     }
                     "ends_with" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("%{escaped}"))
+                            .push(" ESCAPE '\\'");
                     }
                     _ => {
                         qb.push(col).push(" = ").push_bind(needle);
@@ -322,18 +363,28 @@ fn apply_sqlite_user_filters(
             }
             "role" => {
                 let col = "LOWER(COALESCE(role, 'user'))";
+                let escaped = escape_like(&needle);
                 match op {
                     "ne" => {
                         qb.push(col).push(" != ").push_bind(needle);
                     }
                     "contains" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}%"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("%{escaped}%"))
+                            .push(" ESCAPE '\\'");
                     }
                     "starts_with" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("{needle}%"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("{escaped}%"))
+                            .push(" ESCAPE '\\'");
                     }
                     "ends_with" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("%{escaped}"))
+                            .push(" ESCAPE '\\'");
                     }
                     _ => {
                         qb.push(col).push(" = ").push_bind(needle);
@@ -349,18 +400,28 @@ fn apply_sqlite_user_filters(
             }
             _ => {
                 let col = "LOWER(email)";
+                let escaped = escape_like(&needle);
                 match op {
                     "ne" => {
                         qb.push(col).push(" != ").push_bind(needle);
                     }
                     "contains" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}%"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("%{escaped}%"))
+                            .push(" ESCAPE '\\'");
                     }
                     "starts_with" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("{needle}%"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("{escaped}%"))
+                            .push(" ESCAPE '\\'");
                     }
                     "ends_with" => {
-                        qb.push(col).push(" LIKE ").push_bind(format!("%{needle}"));
+                        qb.push(col)
+                            .push(" LIKE ")
+                            .push_bind(format!("%{escaped}"))
+                            .push(" ESCAPE '\\'");
                     }
                     _ => {
                         qb.push(col).push(" = ").push_bind(needle);
@@ -458,89 +519,10 @@ impl AuthAdapter for SqliteAuthAdapter {
         })
     }
 
-    fn update_user_email_verified(
+    fn update_user(
         &self,
         id: &str,
-        verified: bool,
-    ) -> BoxFuture<'static, Result<(), AdapterError>> {
-        let pool = self.pool.clone();
-        let id = id.to_string();
-        Box::pin(async move {
-            let verified_int: i64 = if verified { 1 } else { 0 };
-            let now_str = format_dt(OffsetDateTime::now_utc());
-
-            let res =
-                sqlx::query(r#"UPDATE "user" SET email_verified = ?, updated_at = ? WHERE id = ?"#)
-                    .bind(verified_int)
-                    .bind(now_str)
-                    .bind(id)
-                    .execute(&pool)
-                    .await
-                    .map_err(|e| AdapterError::Query(e.to_string()))?;
-
-            if res.rows_affected() == 0 {
-                Err(AdapterError::NotFound)
-            } else {
-                Ok(())
-            }
-        })
-    }
-
-    fn update_user_profile(
-        &self,
-        id: &str,
-        name: Option<String>,
-        image: Option<Option<String>>,
-    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
-        let pool = self.pool.clone();
-        let id = id.to_string();
-        Box::pin(async move {
-            let current_row = sqlx::query(r#"SELECT * FROM "user" WHERE id = ?"#)
-                .bind(&id)
-                .fetch_optional(&pool)
-                .await
-                .map_err(|e| AdapterError::Query(e.to_string()))?
-                .ok_or(AdapterError::NotFound)?;
-
-            let current = map_user_row(current_row)?;
-            let new_name = name.unwrap_or(current.name);
-            let new_image = match image {
-                Some(Some(img)) if !img.is_empty() => Some(img),
-                Some(_) => None,
-                None => current.image,
-            };
-            let now = OffsetDateTime::now_utc();
-            let now_str = format_dt(now);
-
-            sqlx::query(r#"UPDATE "user" SET name = ?, image = ?, updated_at = ? WHERE id = ?"#)
-                .bind(&new_name)
-                .bind(&new_image)
-                .bind(&now_str)
-                .bind(&id)
-                .execute(&pool)
-                .await
-                .map_err(|e| AdapterError::Query(e.to_string()))?;
-
-            Ok(UserRecord {
-                id,
-                name: new_name,
-                email: current.email,
-                email_verified: current.email_verified,
-                image: new_image,
-                created_at: current.created_at,
-                updated_at: now,
-                role: current.role,
-                banned: current.banned,
-                ban_reason: current.ban_reason,
-                ban_expires: current.ban_expires,
-            })
-        })
-    }
-
-    fn update_user_admin(
-        &self,
-        id: &str,
-        fields: AdminUpdateUserFields,
+        fields: UpdateUserFields,
     ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
         let pool = self.pool.clone();
         let id = id.to_string();
@@ -559,7 +541,11 @@ impl AuthAdapter for SqliteAuthAdapter {
                 .map(|e| e.to_lowercase())
                 .unwrap_or(current.email);
             let new_verified = fields.email_verified.unwrap_or(current.email_verified);
-            let new_image = fields.image.unwrap_or(current.image);
+            let new_image = match fields.image {
+                Some(Some(img)) if !img.is_empty() => Some(img),
+                Some(_) => None,
+                None => current.image,
+            };
             let new_role = fields.role.or(current.role);
             let new_banned = fields.banned.unwrap_or(current.banned);
             let new_ban_reason = fields.ban_reason.unwrap_or(current.ban_reason);

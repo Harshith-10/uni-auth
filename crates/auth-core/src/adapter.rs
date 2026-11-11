@@ -14,8 +14,8 @@ use uuid::Uuid;
 use crate::error::AdapterError;
 use crate::models::{
     AccountRecord, AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput,
-    CreateSessionInput, CreateUserInput, CreateVerificationInput, SessionRecord, UserRecord,
-    VerificationRecord,
+    CreateSessionInput, CreateUserInput, CreateVerificationInput, SessionRecord, UpdateUserFields,
+    UserRecord, VerificationRecord,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -127,22 +127,47 @@ pub trait AuthAdapter: Send + Sync {
         &self,
         email: &str,
     ) -> BoxFuture<'static, Result<Option<UserRecord>, AdapterError>>;
+    fn update_user(
+        &self,
+        id: &str,
+        fields: UpdateUserFields,
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>>;
     fn update_user_email_verified(
         &self,
         id: &str,
         verified: bool,
-    ) -> BoxFuture<'static, Result<(), AdapterError>>;
+    ) -> BoxFuture<'static, Result<(), AdapterError>> {
+        let fut = self.update_user(
+            id,
+            UpdateUserFields {
+                email_verified: Some(verified),
+                ..Default::default()
+            },
+        );
+        Box::pin(async move { fut.await.map(|_| ()) })
+    }
     fn update_user_profile(
         &self,
         id: &str,
         name: Option<String>,
         image: Option<Option<String>>,
-    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>>;
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        self.update_user(
+            id,
+            UpdateUserFields {
+                name,
+                image,
+                ..Default::default()
+            },
+        )
+    }
     fn update_user_admin(
         &self,
         id: &str,
         fields: AdminUpdateUserFields,
-    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>>;
+    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
+        self.update_user(id, fields)
+    }
     fn list_users(
         &self,
         filter: AdminListUsersFilter,
@@ -333,61 +358,10 @@ impl AuthAdapter for InMemoryAuthAdapter {
         })
     }
 
-    fn update_user_email_verified(
+    fn update_user(
         &self,
         id: &str,
-        verified: bool,
-    ) -> BoxFuture<'static, Result<(), AdapterError>> {
-        let store = Arc::clone(&self.store);
-        let id = id.to_string();
-        Box::pin(async move {
-            let mut s = store
-                .write()
-                .map_err(|e| AdapterError::Internal(e.to_string()))?;
-            if let Some(user) = s.users.get_mut(&id) {
-                user.email_verified = verified;
-                user.updated_at = OffsetDateTime::now_utc();
-                Ok(())
-            } else {
-                Err(AdapterError::NotFound)
-            }
-        })
-    }
-
-    fn update_user_profile(
-        &self,
-        id: &str,
-        name: Option<String>,
-        image: Option<Option<String>>,
-    ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
-        let store = Arc::clone(&self.store);
-        let id = id.to_string();
-        Box::pin(async move {
-            let mut s = store
-                .write()
-                .map_err(|e| AdapterError::Internal(e.to_string()))?;
-            if let Some(user) = s.users.get_mut(&id) {
-                if let Some(n) = name {
-                    user.name = n;
-                }
-                if let Some(img_opt) = image {
-                    user.image = match img_opt {
-                        Some(img) if !img.is_empty() => Some(img),
-                        _ => None,
-                    };
-                }
-                user.updated_at = OffsetDateTime::now_utc();
-                Ok(user.clone())
-            } else {
-                Err(AdapterError::NotFound)
-            }
-        })
-    }
-
-    fn update_user_admin(
-        &self,
-        id: &str,
-        fields: AdminUpdateUserFields,
+        fields: UpdateUserFields,
     ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
         let store = Arc::clone(&self.store);
         let id = id.to_string();
@@ -431,7 +405,10 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 user.email_verified = verified;
             }
             if let Some(img_opt) = fields.image {
-                user.image = img_opt;
+                user.image = match img_opt {
+                    Some(img) if !img.is_empty() => Some(img),
+                    _ => None,
+                };
             }
             if let Some(role) = fields.role {
                 user.role = Some(role);

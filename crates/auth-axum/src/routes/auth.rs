@@ -18,6 +18,12 @@ pub async fn sign_up_email(
         return error_to_response(err);
     }
 
+    if let Some(ref url) = payload.callback_url {
+        if let Err(err) = crate::middleware::validate_callback_url(url, &state.trusted_origins) {
+            return error_to_response(err);
+        }
+    }
+
     let remember_me = payload.remember_me.unwrap_or(true);
     let meta = extract_request_meta(&headers);
 
@@ -26,6 +32,20 @@ pub async fn sign_up_email(
             let mut response = (StatusCode::OK, Json(res.clone())).into_response();
             if let Some(ref raw_token) = res.token {
                 state.attach_session_cookie(&mut response, raw_token, remember_me, None);
+                if let Ok(Some(ses)) = state
+                    .service
+                    .adapter()
+                    .find_session_by_token(raw_token)
+                    .await
+                {
+                    if let Ok(Some(usr)) =
+                        state.service.adapter().find_user_by_id(&res.user.id).await
+                    {
+                        response
+                            .extensions_mut()
+                            .insert(crate::state::NewSessionExt(ses, usr));
+                    }
+                }
             }
             response
         }
@@ -42,6 +62,12 @@ pub async fn sign_in_email(
         return error_to_response(err);
     }
 
+    if let Some(ref url) = payload.callback_url {
+        if let Err(err) = crate::middleware::validate_callback_url(url, &state.trusted_origins) {
+            return error_to_response(err);
+        }
+    }
+
     let callback_url = payload.callback_url.clone();
     let remember_me = payload.remember_me.unwrap_or(true);
     let meta = extract_request_meta(&headers);
@@ -50,6 +76,18 @@ pub async fn sign_in_email(
         Ok(res) => {
             let mut response = (StatusCode::OK, Json(res.clone())).into_response();
             state.attach_session_cookie(&mut response, &res.token, remember_me, None);
+            if let Ok(Some(ses)) = state
+                .service
+                .adapter()
+                .find_session_by_token(&res.token)
+                .await
+            {
+                if let Ok(Some(usr)) = state.service.adapter().find_user_by_id(&res.user.id).await {
+                    response
+                        .extensions_mut()
+                        .insert(crate::state::NewSessionExt(ses, usr));
+                }
+            }
 
             if let Some(ref url) = callback_url {
                 if let Ok(loc_val) = url.parse() {

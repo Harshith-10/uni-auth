@@ -22,9 +22,26 @@ impl PluginRegistry {
         }
     }
 
-    /// Registers a new `BetterAuthPlugin`.
+    /// Registers a `BetterAuthPlugin`, replacing any existing plugin with the same `id()`.
     pub fn register(&mut self, plugin: Arc<dyn BetterAuthPlugin>) {
-        self.plugins.push(plugin);
+        let id = plugin.id();
+        if let Some(existing) = self.plugins.iter_mut().find(|p| p.id() == id) {
+            *existing = plugin;
+        } else {
+            self.plugins.push(plugin);
+        }
+    }
+
+    /// Removes a plugin by `id`, returning `true` if it was present.
+    pub fn remove(&mut self, id: &str) -> bool {
+        let before = self.plugins.len();
+        self.plugins.retain(|p| p.id() != id);
+        self.plugins.len() != before
+    }
+
+    /// Checks whether a plugin with `id` is registered.
+    pub fn has(&self, id: &str) -> bool {
+        self.plugins.iter().any(|p| p.id() == id)
     }
 
     /// Returns a slice of all registered plugins.

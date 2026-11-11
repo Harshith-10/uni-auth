@@ -19,7 +19,9 @@ use auth_proto::{
     UpdateUserRequest, UserWire, VerifyEmailResponse,
 };
 
-use crate::plugin::{AuthClientPlugin, SESSION_SIGNAL, matches_core_session_signal};
+use crate::plugin::{
+    AuthClientPlugin, SESSION_SIGNAL, SessionSignalEvent, matches_core_session_signal,
+};
 use crate::plugins::{
     AdminClientExt, AdminClientPlugin, OneTimeTokenClientExt, OneTimeTokenClientPlugin,
 };
@@ -48,6 +50,7 @@ pub enum ClientError {
 }
 
 type SignalSubscriber = Box<dyn Fn(&str) + Send + Sync + 'static>;
+type SessionEventListener = Box<dyn Fn(&SessionSignalEvent) + Send + Sync + 'static>;
 
 /// Native Better Auth client designed for desktop and mobile applications.
 ///
@@ -63,6 +66,7 @@ pub struct BetterAuthNativeClient {
     pub(crate) storage: Arc<dyn TokenStorage>,
     pub(crate) plugins: Vec<Arc<dyn AuthClientPlugin>>,
     pub(crate) signal_subscribers: Arc<RwLock<Vec<SignalSubscriber>>>,
+    pub(crate) session_event_subscribers: Arc<RwLock<Vec<SessionEventListener>>>,
 }
 
 impl BetterAuthNativeClient {
@@ -87,18 +91,23 @@ impl BetterAuthNativeClient {
                 Arc::new(OneTimeTokenClientPlugin),
             ],
             signal_subscribers: Arc::new(RwLock::new(Vec::new())),
+            session_event_subscribers: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
-    /// Attaches an `AuthClientPlugin` to the client.
-    pub fn with_plugin<P: AuthClientPlugin>(mut self, plugin: P) -> Self {
-        self.plugins.push(Arc::new(plugin));
-        self
+    /// Attaches an `AuthClientPlugin` to the client, replacing any existing plugin with the same `id()`.
+    pub fn with_plugin<P: AuthClientPlugin>(self, plugin: P) -> Self {
+        self.with_plugin_arc(Arc::new(plugin))
     }
 
-    /// Attaches an `Arc<dyn AuthClientPlugin>` to the client.
+    /// Attaches an `Arc<dyn AuthClientPlugin>` to the client, replacing any existing plugin with the same `id()`.
     pub fn with_plugin_arc(mut self, plugin: Arc<dyn AuthClientPlugin>) -> Self {
-        self.plugins.push(plugin);
+        let id = plugin.id();
+        if let Some(existing) = self.plugins.iter_mut().find(|p| p.id() == id) {
+            *existing = plugin;
+        } else {
+            self.plugins.push(plugin);
+        }
         self
     }
 
@@ -120,6 +129,30 @@ impl BetterAuthNativeClient {
         }
     }
 
+    /// Subscribes to typed session mutation events.
+    pub fn subscribe_session_events<F: Fn(&SessionSignalEvent) + Send + Sync + 'static>(
+        &self,
+        listener: F,
+    ) {
+        if let Ok(mut subs) = self.session_event_subscribers.write() {
+            subs.push(Box::new(listener));
+        }
+    }
+
+    /// Emits a typed session mutation event to subscribers and triggers `$sessionSignal`.
+    pub fn notify_session_event(&self, event: SessionSignalEvent) {
+        if let Ok(subs) = self.session_event_subscribers.read() {
+            for sub in subs.iter() {
+                sub(&event);
+            }
+        }
+        if let Ok(subs) = self.signal_subscribers.read() {
+            for sub in subs.iter() {
+                sub(SESSION_SIGNAL);
+            }
+        }
+    }
+
     pub(crate) async fn notify_matching_signals(&self, path: &str) {
         let is_session_signal = matches_core_session_signal(path)
             || self.plugins.iter().any(|p| {
@@ -129,9 +162,16 @@ impl BetterAuthNativeClient {
             });
 
         if is_session_signal {
-            if let Ok(subs) = self.signal_subscribers.read() {
-                for sub in subs.iter() {
-                    sub(SESSION_SIGNAL);
+            match path {
+                "/sign-out" | "/delete-user" => {
+                    self.notify_session_event(SessionSignalEvent::SignedOut);
+                }
+                "/admin/impersonate-user"
+                | "/admin/stop-impersonating"
+                | "/one-time-token/verify"
+                | "/update-user" => {}
+                _ => {
+                    self.notify_session_event(SessionSignalEvent::NeedsRefresh);
                 }
             }
         }
@@ -187,28 +227,51 @@ impl BetterAuthNativeClient {
     }
 
     /// Executes a request to an arbitrary protected endpoint (e.g. `/api/saas/me`),
-    /// automatically injecting `Authorization: Bearer <token>` and intercepting `set-auth-token`.
+    /// automatically injecting `Authorization: Bearer <token>`, intercepting `set-auth-token`,
+    /// and running plugin request/response hooks.
     pub async fn fetch_protected<T: serde::de::DeserializeOwned>(
         &self,
         method: reqwest::Method,
         url: &str,
         body: Option<serde_json::Value>,
     ) -> Result<T, ClientError> {
-        let mut builder = self
-            .http
-            .request(method, url)
-            .headers(self.prepare_headers());
+        let mut ctx = crate::transport::ClientRequestContext {
+            method: method.clone(),
+            path: url.to_string(),
+            headers: self.prepare_headers(),
+        };
+        for plugin in &self.plugins {
+            plugin.on_request(&mut ctx)?;
+        }
 
+        let mut builder = self.http.request(method, url).headers(ctx.headers);
         if let Some(b) = body {
             builder = builder.json(&b);
         }
 
         let res = builder.send().await?;
-        self.handle_auth_token_header(res.headers());
-
         let status = res.status().as_u16();
+        let res_headers = res.headers().clone();
+        self.handle_auth_token_header(&res_headers);
+
+        let res_ctx = crate::transport::ClientResponseContext {
+            path: url.to_string(),
+            status,
+            headers: res_headers,
+        };
+        for plugin in &self.plugins {
+            plugin.on_response(&res_ctx)?;
+        }
+
         if status >= 400 {
             let text = res.text().await.unwrap_or_default();
+            if let Ok(err_body) = serde_json::from_str::<auth_proto::AuthErrorResponse>(&text) {
+                return Err(ClientError::Api {
+                    status,
+                    code: err_body.code,
+                    message: err_body.message,
+                });
+            }
             return Err(ClientError::Api {
                 status,
                 code: None,
@@ -349,17 +412,20 @@ impl BetterAuthNativeClient {
         name: Option<String>,
         image: Option<Option<String>>,
     ) -> Result<UserWire, ClientError> {
-        self.send_auth_request(
-            Method::POST,
-            "/update-user",
-            None::<&()>,
-            Some(&UpdateUserRequest {
-                name,
-                image,
-                extra: serde_json::Map::new(),
-            }),
-        )
-        .await
+        let res: UserWire = self
+            .send_auth_request(
+                Method::POST,
+                "/update-user",
+                None::<&()>,
+                Some(&UpdateUserRequest {
+                    name,
+                    image,
+                    extra: serde_json::Map::new(),
+                }),
+            )
+            .await?;
+        self.notify_session_event(SessionSignalEvent::UserUpdated(res.clone()));
+        Ok(res)
     }
 
     /// Deletes the current user account and clears secure storage.

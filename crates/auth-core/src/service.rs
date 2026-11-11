@@ -21,11 +21,13 @@ use crate::email::{EmailSender, NoopEmailSender};
 use crate::error::{AdapterError, AuthError};
 use crate::hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter};
 use crate::models::{
-    AccountRecord, AdminUpdateUserFields, CreateAccountInput, CreateSessionInput, CreateUserInput,
+    AccountRecord, CreateAccountInput, CreateSessionInput, CreateUserInput,
     CreateVerificationInput, RequestMeta, SessionRecord, UserRecord,
 };
+#[allow(deprecated)]
+use crate::plugin::AuthPlugin;
 use crate::plugin::admin::{AdminPlugin, AdminServiceExt};
-use crate::plugin::{AuthPlugin, BetterAuthPlugin, HookedAdapter, PluginRegistry};
+use crate::plugin::{BetterAuthPlugin, HookedAdapter, PluginRateLimitRule, PluginRegistry};
 
 /// Configuration options for `AuthService`.
 #[derive(Clone, Debug)]
@@ -90,13 +92,14 @@ impl Default for AuthConfig {
 #[derive(Clone)]
 pub struct AuthService {
     config: AuthConfig,
-    admin_config: AdminConfig,
     raw_adapter: Arc<dyn AuthAdapter>,
     adapter: Arc<dyn AuthAdapter>,
     email_sender: Arc<dyn EmailSender>,
     hooks: Arc<dyn AuthHooks>,
     rate_limiter: Option<Arc<SlidingWindowRateLimiter>>,
     plugins: PluginRegistry,
+    plugin_rate_limiters: Vec<(PluginRateLimitRule, Arc<SlidingWindowRateLimiter>)>,
+    #[allow(deprecated)]
     legacy_plugins: Arc<Vec<Arc<dyn AuthPlugin>>>,
     auto_sign_in_after_verification: bool,
     session_update_age: Duration,
@@ -108,15 +111,16 @@ impl AuthService {
         let raw_adapter = adapter.clone();
         let mut plugins = PluginRegistry::new();
         plugins.register(Arc::new(AdminPlugin::default()));
+        plugins.register(Arc::new(crate::plugin::OneTimeTokenPlugin::default()));
         let mut s = Self {
             config,
-            admin_config: AdminConfig::default(),
             raw_adapter,
             adapter,
             email_sender: Arc::new(NoopEmailSender),
             hooks: Arc::new(NoopAuthHooks),
             rate_limiter: None,
             plugins,
+            plugin_rate_limiters: Vec::new(),
             legacy_plugins: Arc::new(Vec::new()),
             auto_sign_in_after_verification: false,
             session_update_age: Duration::hours(24),
@@ -127,15 +131,14 @@ impl AuthService {
     }
 
     pub fn with_admin_config(mut self, admin_config: AdminConfig) -> Self {
-        self.admin_config = admin_config.clone();
         self.plugins
             .register(Arc::new(AdminPlugin::with_config(admin_config)));
         self.rebuild_hooked_adapter();
         self
     }
 
-    pub fn admin_config(&self) -> &AdminConfig {
-        &self.admin_config
+    pub fn admin_config(&self) -> Option<&AdminConfig> {
+        self.get_plugin::<AdminPlugin>().map(|p| &p.config)
     }
 
     pub fn with_email_sender(mut self, email_sender: Arc<dyn EmailSender>) -> Self {
@@ -178,6 +181,7 @@ impl AuthService {
     }
 
     /// Registers a legacy `AuthPlugin` with `AuthService`.
+    #[allow(deprecated)]
     pub fn with_legacy_plugin(mut self, plugin: Arc<dyn AuthPlugin>) -> Self {
         let mut list = (*self.legacy_plugins).clone();
         list.push(plugin);
@@ -186,6 +190,7 @@ impl AuthService {
     }
 
     /// Accessor for legacy plugins.
+    #[allow(deprecated)]
     pub fn legacy_plugins(&self) -> &[Arc<dyn AuthPlugin>] {
         &self.legacy_plugins
     }
@@ -197,6 +202,29 @@ impl AuthService {
         } else {
             self.adapter = Arc::new(HookedAdapter::new(self.raw_adapter.clone(), db_hooks));
         }
+        self.plugin_rate_limiters = self
+            .plugins
+            .rate_limits()
+            .into_iter()
+            .map(|rule| {
+                let limiter = Arc::new(SlidingWindowRateLimiter::new(
+                    rule.max_requests,
+                    rule.window,
+                ));
+                (rule, limiter)
+            })
+            .collect();
+    }
+
+    /// Checks path-based rate limits defined by registered plugins.
+    pub fn check_plugin_rate_limits(&self, path: &str, client_ip: &str) -> Result<(), AuthError> {
+        for (rule, limiter) in &self.plugin_rate_limiters {
+            if (rule.path_matcher)(path) {
+                let key = format!("plugin:{}:{}:{}", rule.id, path, client_ip);
+                limiter.check(&key)?;
+            }
+        }
+        Ok(())
     }
 
     /// Configures whether verifying an email address automatically issues a session token.
@@ -292,47 +320,16 @@ impl AuthService {
         self.hooks.on_user_deleted(user_id).await;
     }
 
-    /// Enforces the Admin plugin banned-user check before creating a session.
-    /// Automatically clears expired bans (`ban_expires < now`).
-    ///
-    /// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/admin.ts` lines 81-112
-    async fn enforce_not_banned(&self, user: &UserRecord) -> Result<(), AuthError> {
-        if user.banned {
-            if let Some(exp) = user.ban_expires {
-                if exp < OffsetDateTime::now_utc() {
-                    let _ = self
-                        .adapter
-                        .update_user_admin(
-                            &user.id,
-                            AdminUpdateUserFields {
-                                banned: Some(false),
-                                ban_reason: Some(None),
-                                ban_expires: Some(None),
-                                ..Default::default()
-                            },
-                        )
-                        .await;
-                    return Ok(());
-                }
-            }
-            return Err(AuthError::BannedUser(
-                self.admin_config.banned_user_message.clone(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Issues a session for `user` while executing banned-user checks, `AuthPlugin`, and `AuthHooks` callbacks.
+    /// Issues a session for `user` while executing `AuthPlugin` and `AuthHooks` callbacks.
     pub async fn issue_session_for_user(
         &self,
         user: &UserRecord,
         meta: RequestMeta,
         run_before_sign_in: bool,
     ) -> Result<SessionRecord, AuthError> {
-        self.enforce_not_banned(user).await?;
-
         let user_wire = user.to_wire();
         if run_before_sign_in {
+            #[allow(deprecated)]
             for plugin in self.legacy_plugins.iter() {
                 plugin.on_before_sign_in(&user_wire).await?;
             }
@@ -357,6 +354,7 @@ impl AuthService {
         self.hooks
             .on_session_created(&session_wire, &user_wire)
             .await;
+        #[allow(deprecated)]
         for plugin in self.legacy_plugins.iter() {
             plugin
                 .on_after_session_issued(&session_wire, &user_wire)

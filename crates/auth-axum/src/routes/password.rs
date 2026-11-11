@@ -31,6 +31,9 @@ pub async fn reset_password_callback(
     Query(query): Query<ResetPasswordQuery>,
 ) -> Response {
     let callback = query.callback_url.unwrap_or_else(|| "/".to_string());
+    if let Err(err) = crate::middleware::validate_callback_url(&callback, &state.trusted_origins) {
+        return error_to_response(err);
+    }
     let identifier = format!("reset-password:{token}");
 
     match state.service.adapter().find_verification(&identifier).await {

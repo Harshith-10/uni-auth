@@ -97,18 +97,15 @@ impl DatabaseHooks for CustomHooks {
     fn before_update_user(
         &self,
         _user_id: &str,
-        patch: UserUpdatePatch,
+        mut patch: UserUpdatePatch,
         _adapter: &dyn AuthAdapter,
     ) -> BoxFuture<'static, Result<HookOutcome<UserUpdatePatch>, AuthError>> {
         Box::pin(async move {
-            match patch {
-                UserUpdatePatch::Profile { name: _, image } => {
-                    Ok(HookOutcome::Modified(UserUpdatePatch::Profile {
-                        name: Some("Overridden Name".to_string()),
-                        image,
-                    }))
-                }
-                other => Ok(HookOutcome::Continue(other)),
+            if patch.name.is_some() {
+                patch.name = Some("Overridden Name".to_string());
+                Ok(HookOutcome::Modified(patch))
+            } else {
+                Ok(HookOutcome::Continue(patch))
             }
         })
     }
@@ -562,4 +559,138 @@ async fn test_one_time_token_plugin_atomic_consumption_and_hashing() {
             .unwrap()
             .contains("set-ott")
     );
+}
+
+#[test]
+fn test_plugin_registry_replace_by_id_and_removal() {
+    use auth_core::plugin::PluginRegistry;
+
+    struct DummyPlugin {
+        id: &'static str,
+        val: i32,
+    }
+    impl BetterAuthPlugin for DummyPlugin {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    let mut reg = PluginRegistry::new();
+    assert_eq!(reg.plugins().len(), 0);
+
+    reg.register(Arc::new(DummyPlugin {
+        id: "dummy",
+        val: 1,
+    }));
+    assert_eq!(reg.plugins().len(), 1);
+    assert!(reg.has("dummy"));
+    assert_eq!(
+        reg.plugins()
+            .iter()
+            .find(|p| p.id() == "dummy")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<DummyPlugin>()
+            .unwrap()
+            .val,
+        1
+    );
+
+    // Re-registering with the same id should replace in-place
+    reg.register(Arc::new(DummyPlugin {
+        id: "dummy",
+        val: 2,
+    }));
+    assert_eq!(reg.plugins().len(), 1);
+    assert_eq!(
+        reg.plugins()
+            .iter()
+            .find(|p| p.id() == "dummy")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<DummyPlugin>()
+            .unwrap()
+            .val,
+        2
+    );
+
+    // Register another plugin
+    reg.register(Arc::new(DummyPlugin {
+        id: "other",
+        val: 10,
+    }));
+    assert_eq!(reg.plugins().len(), 2);
+    assert!(reg.has("other"));
+
+    // Remove by ID
+    assert!(reg.remove("dummy"));
+    assert_eq!(reg.plugins().len(), 1);
+    assert!(!reg.has("dummy"));
+    assert!(reg.has("other"));
+}
+
+#[tokio::test]
+async fn test_totp_validator_better_auth_plugin_registration() {
+    use auth_core::plugin::TotpValidator;
+
+    let adapter = Arc::new(InMemoryAuthAdapter::new());
+    let config = AuthConfig {
+        secret: b"01234567890123456789012345678901".to_vec(),
+        base_url: "http://localhost:3000/api/auth".to_string(),
+        session_expires_in: time::Duration::days(7),
+        ott_expires_in: time::Duration::minutes(3),
+        reset_password_expires_in: time::Duration::hours(1),
+        verify_email_expires_in: time::Duration::hours(24),
+        auto_sign_in: true,
+        require_email_verification: false,
+        min_password_length: 8,
+        max_password_length: 128,
+        delete_user_enabled: true,
+        defer_session_refresh: false,
+    };
+
+    let totp = TotpValidator::default();
+    let service = AuthService::new(config, adapter).with_plugin(totp);
+
+    let retrieved = service.get_plugin::<TotpValidator>();
+    assert!(retrieved.is_some());
+    assert_eq!(retrieved.unwrap().id(), "two-factor");
+}
+
+#[tokio::test]
+async fn test_unified_update_user_adapter_and_hooks() {
+    let adapter = Arc::new(InMemoryAuthAdapter::new());
+    let user = adapter
+        .create_user(CreateUserInput {
+            id: None,
+            name: "Original Name".to_string(),
+            email: "orig@example.com".to_string(),
+            email_verified: false,
+            image: None,
+            role: Some("user".to_string()),
+        })
+        .await
+        .unwrap();
+
+    let patch = UpdateUserFields {
+        name: Some("Updated Name".to_string()),
+        email: None,
+        image: Some(Some("https://avatar.com/1.png".to_string())),
+        email_verified: Some(true),
+        role: Some("admin".to_string()),
+        banned: Some(true),
+        ban_reason: Some(Some("spamming".to_string())),
+        ban_expires: None,
+    };
+
+    let updated = adapter.update_user(&user.id, patch).await.unwrap();
+    assert_eq!(updated.name, "Updated Name");
+    assert_eq!(updated.image.as_deref(), Some("https://avatar.com/1.png"));
+    assert!(updated.email_verified);
+    assert_eq!(updated.role.as_deref(), Some("admin"));
+    assert_eq!(updated.banned, true);
+    assert_eq!(updated.ban_reason.as_deref(), Some("spamming"));
 }

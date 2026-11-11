@@ -31,6 +31,13 @@ pub async fn verify_email(
     headers: HeaderMap,
     Query(query): Query<VerifyEmailQuery>,
 ) -> Response {
+    if let Some(ref callback) = query.callback_url {
+        if let Err(err) = crate::middleware::validate_callback_url(callback, &state.trusted_origins)
+        {
+            return error_to_response(err);
+        }
+    }
+
     let meta = extract_request_meta(&headers);
     match state
         .service
@@ -46,6 +53,21 @@ pub async fn verify_email(
 
             if let Some(ref raw_token) = res.token {
                 state.attach_session_cookie(&mut response, raw_token, true, None);
+                if let Ok(Some(ses)) = state
+                    .service
+                    .adapter()
+                    .find_session_by_token(raw_token)
+                    .await
+                {
+                    if let Some(ref u) = res.user {
+                        if let Ok(Some(usr)) = state.service.adapter().find_user_by_id(&u.id).await
+                        {
+                            response
+                                .extensions_mut()
+                                .insert(crate::state::NewSessionExt(ses, usr));
+                        }
+                    }
+                }
             }
 
             response

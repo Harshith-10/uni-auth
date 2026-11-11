@@ -68,8 +68,42 @@ pub async fn endpoint_hooks_middleware(
     mut req: Request,
     next: Next,
 ) -> Response {
-    let path = req.uri().path().to_string();
+    // Normalize path relative to /api/auth if not already stripped by nest()
+    let raw_path = req.uri().path();
+    let path = raw_path
+        .strip_prefix("/api/auth")
+        .filter(|p| !p.is_empty())
+        .unwrap_or(raw_path)
+        .to_string();
     let method = req.method().as_str().to_string();
+
+    // CSRF Origin verification for mutating requests (POST, PUT, PATCH, DELETE) without Bearer header
+    let is_mutating = matches!(
+        *req.method(),
+        http::Method::POST | http::Method::PUT | http::Method::PATCH | http::Method::DELETE
+    );
+    let has_bearer = req
+        .headers()
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase().starts_with("bearer "))
+        .unwrap_or(false);
+
+    if is_mutating && !has_bearer {
+        if let Err(err) =
+            crate::middleware::verify_trusted_origin(req.headers(), &state.trusted_origins)
+        {
+            return crate::error::error_to_response(err);
+        }
+    }
+
+    // Enforce plugin rate limits before executing endpoint
+    let client_ip = crate::extract::extract_request_meta(req.headers())
+        .ip_address
+        .unwrap_or_else(|| "local".to_string());
+    if let Err(err) = state.service.check_plugin_rate_limits(&path, &client_ip) {
+        return crate::error::error_to_response(err);
+    }
 
     let mut request_headers = std::collections::HashMap::new();
     for (name, value) in req.headers() {
@@ -105,7 +139,62 @@ pub async fn endpoint_hooks_middleware(
         }
     }
 
-    let mut response = next.run(req).await;
+    let response = next.run(req).await;
+
+    // Only run after-hook processing if at least one plugin matches `ctx.path`
+    let has_after_hook = state
+        .service
+        .plugins()
+        .plugins()
+        .iter()
+        .any(|p| p.matches_after(&ctx.path));
+
+    if !has_after_hook {
+        return response;
+    }
+
+    // 1. Copy outgoing response headers into ctx.response_headers
+    for (name, value) in response.headers() {
+        if let Ok(v_str) = value.to_str() {
+            ctx.response_headers
+                .insert(name.as_str().to_lowercase(), v_str.to_string());
+        }
+    }
+
+    // 2. Extract NewSessionExt if a new session was issued during this request
+    if let Some(crate::state::NewSessionExt(ses, usr)) = response
+        .extensions()
+        .get::<crate::state::NewSessionExt>()
+        .cloned()
+    {
+        ctx.new_session = Some((ses, usr));
+    }
+
+    // 3. Buffer JSON body if content-type is application/json so after-hooks can inspect/filter it
+    let (mut parts, body) = response.into_parts();
+    let is_json = parts
+        .headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("application/json"))
+        .unwrap_or(false);
+
+    let body_bytes = if is_json {
+        match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
+            Ok(b) => {
+                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&b) {
+                    ctx.response_body = Some(val);
+                }
+                b
+            }
+            Err(_) => axum::body::Bytes::new(),
+        }
+    } else {
+        match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
+            Ok(b) => b,
+            Err(_) => axum::body::Bytes::new(),
+        }
+    };
 
     if let Err(err) = state
         .service
@@ -121,11 +210,20 @@ pub async fn endpoint_hooks_middleware(
             http::header::HeaderName::from_bytes(k.as_bytes()),
             http::header::HeaderValue::from_str(&v),
         ) {
-            response.headers_mut().insert(hname, hval);
+            parts.headers.insert(hname, hval);
         }
     }
 
-    response
+    let final_bytes = if let Some(modified_json) = ctx.response_body {
+        parts.headers.remove(http::header::CONTENT_LENGTH);
+        serde_json::to_vec(&modified_json)
+            .map(axum::body::Bytes::from)
+            .unwrap_or(body_bytes)
+    } else {
+        body_bytes
+    };
+
+    Response::from_parts(parts, axum::body::Body::from(final_bytes))
 }
 
 impl AxumAuthPlugin for OneTimeTokenPlugin {

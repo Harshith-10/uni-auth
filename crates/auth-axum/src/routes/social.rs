@@ -3,19 +3,33 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
-use time::OffsetDateTime;
 
 use crate::error_to_response;
 use crate::extract::{CurrentSession, FreshSession, extract_request_meta};
 use crate::state::AuthState;
 use auth_core::OAuthCallbackResult;
-use auth_core::models::CreateVerificationInput;
 use auth_proto::{AuthErrorResponse, LinkSocialRequest, SignInSocialRequest, UnlinkAccountRequest};
 
 pub async fn sign_in_social(
     State(state): State<AuthState>,
     Json(payload): Json<SignInSocialRequest>,
 ) -> Response {
+    if let Some(ref cb) = payload.callback_url {
+        if let Err(err) = crate::middleware::validate_callback_url(cb, &state.trusted_origins) {
+            return error_to_response(err);
+        }
+    }
+    if let Some(ref cb) = payload.new_user_callback_url {
+        if let Err(err) = crate::middleware::validate_callback_url(cb, &state.trusted_origins) {
+            return error_to_response(err);
+        }
+    }
+    if let Some(ref cb) = payload.error_callback_url {
+        if let Err(err) = crate::middleware::validate_callback_url(cb, &state.trusted_origins) {
+            return error_to_response(err);
+        }
+    }
+
     let provider = match state.oauth_providers.get(&payload.provider) {
         Some(p) => p,
         None => {
@@ -49,6 +63,17 @@ pub async fn link_social(
     current_session: CurrentSession,
     Json(payload): Json<LinkSocialRequest>,
 ) -> Response {
+    if let Some(ref cb) = payload.callback_url {
+        if let Err(err) = crate::middleware::validate_callback_url(cb, &state.trusted_origins) {
+            return error_to_response(err);
+        }
+    }
+    if let Some(ref cb) = payload.error_callback_url {
+        if let Err(err) = crate::middleware::validate_callback_url(cb, &state.trusted_origins) {
+            return error_to_response(err);
+        }
+    }
+
     let provider = match state.oauth_providers.get(&payload.provider) {
         Some(p) => p,
         None => {
@@ -226,20 +251,13 @@ pub async fn oauth_callback(
 
             if let Some(target) = redirect_target {
                 let redirect_url = if is_loopback_ott_callback(&target) {
-                    let ott = auth_core::crypto::generate_random_token(32);
-                    let ott_exp = OffsetDateTime::now_utc() + state.service.config().ott_expires_in;
-                    let _ = state
-                        .service
-                        .adapter()
-                        .create_verification(CreateVerificationInput {
-                            id: None,
-                            identifier: format!("one-time-token:{ott}"),
-                            value: session.token.clone(),
-                            expires_at: ott_exp,
-                        })
-                        .await;
+                    let ott_res = match state.service.generate_one_time_token(&session.token).await
+                    {
+                        Ok(r) => r,
+                        Err(err) => return error_to_response(err),
+                    };
                     let separator = if target.contains('?') { "&" } else { "?" };
-                    format!("{target}{separator}token={ott}")
+                    format!("{target}{separator}token={}", ott_res.token)
                 } else {
                     target
                 };
@@ -247,30 +265,28 @@ pub async fn oauth_callback(
                 let mut response = Redirect::temporary(&redirect_url).into_response();
                 state.attach_session_cookie(&mut response, &session.token, true, None);
                 response
+                    .extensions_mut()
+                    .insert(crate::state::NewSessionExt(session, user));
+                response
             } else {
-                let ott = auth_core::crypto::generate_random_token(32);
-                let ott_exp = OffsetDateTime::now_utc() + state.service.config().ott_expires_in;
-                let _ = state
-                    .service
-                    .adapter()
-                    .create_verification(CreateVerificationInput {
-                        id: None,
-                        identifier: format!("one-time-token:{ott}"),
-                        value: session.token.clone(),
-                        expires_at: ott_exp,
-                    })
-                    .await;
+                let ott_res = match state.service.generate_one_time_token(&session.token).await {
+                    Ok(r) => r,
+                    Err(err) => return error_to_response(err),
+                };
 
                 let mut response = (
                     StatusCode::OK,
                     Json(serde_json::json!({
                         "token": session.token,
-                        "oneTimeToken": ott,
+                        "oneTimeToken": ott_res.token,
                         "user": user.to_wire()
                     })),
                 )
                     .into_response();
                 state.attach_session_cookie(&mut response, &session.token, true, None);
+                response
+                    .extensions_mut()
+                    .insert(crate::state::NewSessionExt(session, user));
                 response
             }
         }

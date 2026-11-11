@@ -2,7 +2,10 @@
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use std::any::Any;
 use time::OffsetDateTime;
+
+use super::BetterAuthPlugin;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -51,5 +54,15 @@ impl TotpValidator {
             }
         }
         false
+    }
+}
+
+impl BetterAuthPlugin for TotpValidator {
+    fn id(&self) -> &'static str {
+        "two-factor"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

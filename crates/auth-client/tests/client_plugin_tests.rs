@@ -250,3 +250,123 @@ async fn test_one_time_token_client_ext_facade() {
         .unwrap();
     assert_eq!(verify_res.user.email, "ott_client@example.com");
 }
+
+#[tokio::test]
+async fn test_client_with_plugin_deduplication() {
+    struct TestClientPlugin {
+        id: &'static str,
+        tag: usize,
+    }
+    impl AuthClientPlugin for TestClientPlugin {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    let storage = Arc::new(MockTokenStorage::new());
+    let client = BetterAuthNativeClient::new(
+        "http://localhost:3000".to_string(),
+        storage as Arc<dyn TokenStorage>,
+    )
+    .with_plugin(TestClientPlugin {
+        id: "custom",
+        tag: 1,
+    })
+    .with_plugin(TestClientPlugin {
+        id: "custom",
+        tag: 2,
+    });
+
+    let plugins = client.plugins();
+    let matching: Vec<_> = plugins.iter().filter(|p| p.id() == "custom").collect();
+    assert_eq!(matching.len(), 1);
+    let p = matching[0]
+        .as_any()
+        .downcast_ref::<TestClientPlugin>()
+        .unwrap();
+    assert_eq!(p.tag, 2);
+}
+
+#[tokio::test]
+async fn test_auth_store_automatic_reaction_to_impersonation_and_ott() {
+    use auth_client::store::{AuthStatus, AuthStore};
+
+    let (base_url, service) = start_test_server().await;
+    let storage = Arc::new(MockTokenStorage::new());
+    let client = Arc::new(BetterAuthNativeClient::new(
+        base_url,
+        Arc::clone(&storage) as Arc<dyn TokenStorage>,
+    ));
+
+    let store = AuthStore::new(Arc::clone(&client));
+
+    // Admin signs up
+    let admin_res = client
+        .sign_up_email(
+            "Admin User",
+            "admin_store@example.com",
+            "adminpass123",
+            Some(true),
+        )
+        .await
+        .unwrap();
+
+    // Promote to admin role
+    service
+        .adapter()
+        .update_user_admin(
+            &admin_res.user.id,
+            AdminUpdateUserFields {
+                role: Some("admin".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Create target user
+    let target_res = client
+        .admin()
+        .create_user(AdminCreateUserRequest {
+            name: "Target User".to_string(),
+            email: "target_store@example.com".to_string(),
+            password: Some("targetpass123".to_string()),
+            role: Some(RoleValue::Single("user".to_string())),
+            data: Some(serde_json::Map::new()),
+        })
+        .await
+        .unwrap();
+
+    // Impersonate target user via client.admin() DIRECTLY (no store method called)
+    let _imp = client
+        .admin()
+        .impersonate_user(&target_res.user.id)
+        .await
+        .unwrap();
+
+    // AuthStore should automatically reflect the impersonated session via SessionSignalEvent!
+    assert!(store.is_authenticated());
+    if let AuthStatus::Authenticated { user, session } = store.status() {
+        assert_eq!(user.email, "target_store@example.com");
+        assert_eq!(
+            session.impersonated_by.as_deref(),
+            Some(admin_res.user.id.as_str())
+        );
+    } else {
+        panic!("Store should be authenticated with impersonated session");
+    }
+
+    // Stop impersonating via client.admin() DIRECTLY
+    client.admin().stop_impersonating().await.unwrap();
+
+    // AuthStore should automatically restore root admin session!
+    if let AuthStatus::Authenticated { user, session } = store.status() {
+        assert_eq!(user.email, "admin_store@example.com");
+        assert!(session.impersonated_by.is_none());
+    } else {
+        panic!("Store should be authenticated with admin session");
+    }
+}

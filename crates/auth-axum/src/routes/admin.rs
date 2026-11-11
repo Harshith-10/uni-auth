@@ -8,13 +8,16 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use crate::cookies::{build_clear_session_cookie, build_session_cookie};
-use crate::error_to_response;
+use crate::error::ApiError;
 use crate::extract::{CurrentSession, extract_request_meta};
 use crate::state::AuthState;
+use auth_core::AdminServiceExt;
 use auth_proto::{
     AdminBanUserRequest, AdminCreateUserRequest, AdminGetUserQuery, AdminHasPermissionRequest,
-    AdminListUsersQuery, AdminRevokeUserSessionRequest, AdminSetRoleRequest,
-    AdminSetUserPasswordRequest, AdminUpdateUserRequest, AdminUserIdRequest,
+    AdminListUserSessionsResponse, AdminListUsersQuery, AdminListUsersResponse,
+    AdminPermissionResponse, AdminRevokeUserSessionRequest, AdminSetRoleRequest,
+    AdminSetUserPasswordRequest, AdminSuccessResponse, AdminUpdateUserRequest, AdminUserIdRequest,
+    AdminUserResponse, StatusResponse, UserWire,
 };
 
 fn admin_cookie_name(secure: bool) -> &'static str {
@@ -59,15 +62,13 @@ pub async fn set_role(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminSetRoleRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminUserResponse>, ApiError> {
+    let res = state
         .service
-        .admin_set_role(&current_session.user, payload)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .set_role(&current_session.user, payload)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `GET /api/auth/admin/get-user`
@@ -75,15 +76,13 @@ pub async fn get_user(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Query(query): Query<AdminGetUserQuery>,
-) -> Response {
-    match state
+) -> Result<Json<UserWire>, ApiError> {
+    let res = state
         .service
-        .admin_get_user(&current_session.user, &query.id)
-        .await
-    {
-        Ok(user) => (StatusCode::OK, Json(user)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .get_user(&current_session.user, &query.id)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/create-user`
@@ -91,15 +90,13 @@ pub async fn create_user(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminCreateUserRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminUserResponse>, ApiError> {
+    let res = state
         .service
-        .admin_create_user(&current_session.user, payload)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .create_user(&current_session.user, payload)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/update-user`
@@ -107,15 +104,13 @@ pub async fn admin_update_user(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminUpdateUserRequest>,
-) -> Response {
-    match state
+) -> Result<Json<UserWire>, ApiError> {
+    let res = state
         .service
-        .admin_update_user(&current_session.user, payload)
-        .await
-    {
-        Ok(user) => (StatusCode::OK, Json(user)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .update_user(&current_session.user, payload)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `GET /api/auth/admin/list-users`
@@ -123,15 +118,13 @@ pub async fn list_users(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Query(query): Query<AdminListUsersQuery>,
-) -> Response {
-    match state
+) -> Result<Json<AdminListUsersResponse>, ApiError> {
+    let res = state
         .service
-        .admin_list_users(&current_session.user, query)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .list_users(&current_session.user, query)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/list-user-sessions`
@@ -139,15 +132,13 @@ pub async fn list_user_sessions(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminUserIdRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminListUserSessionsResponse>, ApiError> {
+    let res = state
         .service
-        .admin_list_user_sessions(&current_session.user, &payload.user_id)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .list_user_sessions(&current_session.user, &payload.user_id)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/ban-user`
@@ -155,15 +146,13 @@ pub async fn ban_user(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminBanUserRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminUserResponse>, ApiError> {
+    let res = state
         .service
-        .admin_ban_user(&current_session.user, payload)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .ban_user(&current_session.user, payload)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/unban-user`
@@ -171,15 +160,13 @@ pub async fn unban_user(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminUserIdRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminUserResponse>, ApiError> {
+    let res = state
         .service
-        .admin_unban_user(&current_session.user, &payload.user_id)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .unban_user(&current_session.user, &payload.user_id)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/impersonate-user`
@@ -188,41 +175,37 @@ pub async fn impersonate_user(
     headers: HeaderMap,
     current_session: CurrentSession,
     Json(payload): Json<AdminUserIdRequest>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let meta = extract_request_meta(&headers);
-    match state
-        .service
-        .admin_impersonate_user(&current_session.user, &payload.user_id, meta)
-        .await
-    {
-        Ok(res) => {
-            let signed_admin = state.service.sign_token(&current_session.session.token);
+    let admin_svc = state.service.admin()?;
+    let res = admin_svc
+        .impersonate_user(&current_session.user, &payload.user_id, meta)
+        .await?;
 
-            let mut response = (StatusCode::OK, Json(res.clone())).into_response();
+    let signed_admin = state.service.sign_token(&current_session.session.token);
 
-            // 1. Stash original admin session in `better-auth.admin_session` cookie and `set-admin-auth-token` header
-            let admin_cookie = build_session_cookie(
-                admin_cookie_name(state.secure_cookies),
-                &signed_admin,
-                state.service.config().session_expires_in.whole_seconds(),
-                state.secure_cookies,
-                &state.same_site,
-            );
-            if let Ok(c) = admin_cookie.parse() {
-                response.headers_mut().append(header::SET_COOKIE, c);
-            }
-            if let Ok(tok) = signed_admin.parse() {
-                response.headers_mut().insert("set-admin-auth-token", tok);
-            }
+    let mut response = (StatusCode::OK, Json(res.clone())).into_response();
 
-            // 2. Set active session cookie and `set-auth-token` to the impersonated session
-            let duration = state.service.admin_config().impersonation_session_duration;
-            state.attach_session_cookie(&mut response, &res.session.token, true, Some(duration));
-
-            response
-        }
-        Err(err) => error_to_response(err),
+    // 1. Stash original admin session in `better-auth.admin_session` cookie and `set-admin-auth-token` header
+    let admin_cookie = build_session_cookie(
+        admin_cookie_name(state.secure_cookies),
+        &signed_admin,
+        state.service.config().session_expires_in.whole_seconds(),
+        state.secure_cookies,
+        &state.same_site,
+    );
+    if let Ok(c) = admin_cookie.parse() {
+        response.headers_mut().append(header::SET_COOKIE, c);
     }
+    if let Ok(tok) = signed_admin.parse() {
+        response.headers_mut().insert("set-admin-auth-token", tok);
+    }
+
+    // 2. Set active session cookie and `set-auth-token` to the impersonated session
+    let duration = admin_svc.plugin.config.impersonation_session_duration;
+    state.attach_session_cookie(&mut response, &res.session.token, true, Some(duration));
+
+    Ok(response)
 }
 
 /// `POST /api/auth/admin/stop-impersonating`
@@ -230,33 +213,30 @@ pub async fn stop_impersonating(
     State(state): State<AuthState>,
     headers: HeaderMap,
     current_session: CurrentSession,
-) -> Response {
+) -> Result<Response, ApiError> {
     let stashed_admin = extract_admin_session_token(&headers);
-    match state
+    let res = state
         .service
-        .admin_stop_impersonating(&current_session.session, stashed_admin.as_deref())
-        .await
-    {
-        Ok(res) => {
-            let mut response = (StatusCode::OK, Json(res.clone())).into_response();
+        .admin()?
+        .stop_impersonating(&current_session.session, stashed_admin.as_deref())
+        .await?;
 
-            // 1. Restore admin session cookie and `set-auth-token`
-            state.attach_session_cookie(&mut response, &res.session.token, true, None);
+    let mut response = (StatusCode::OK, Json(res.clone())).into_response();
 
-            // 2. Expire `better-auth.admin_session` cookie
-            let clear_admin = build_clear_session_cookie(
-                admin_cookie_name(state.secure_cookies),
-                state.secure_cookies,
-                &state.same_site,
-            );
-            if let Ok(c) = clear_admin.parse() {
-                response.headers_mut().append(header::SET_COOKIE, c);
-            }
+    // 1. Restore admin session cookie and `set-auth-token`
+    state.attach_session_cookie(&mut response, &res.session.token, true, None);
 
-            response
-        }
-        Err(err) => error_to_response(err),
+    // 2. Expire `better-auth.admin_session` cookie
+    let clear_admin = build_clear_session_cookie(
+        admin_cookie_name(state.secure_cookies),
+        state.secure_cookies,
+        &state.same_site,
+    );
+    if let Ok(c) = clear_admin.parse() {
+        response.headers_mut().append(header::SET_COOKIE, c);
     }
+
+    Ok(response)
 }
 
 /// `POST /api/auth/admin/revoke-user-session`
@@ -264,15 +244,13 @@ pub async fn revoke_user_session(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminRevokeUserSessionRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminSuccessResponse>, ApiError> {
+    let res = state
         .service
-        .admin_revoke_user_session(&current_session.user, &payload.session_token)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .revoke_user_session(&current_session.user, &payload.session_token)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/revoke-user-sessions`
@@ -280,15 +258,13 @@ pub async fn revoke_user_sessions(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminUserIdRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminSuccessResponse>, ApiError> {
+    let res = state
         .service
-        .admin_revoke_user_sessions(&current_session.user, &payload.user_id)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .revoke_user_sessions(&current_session.user, &payload.user_id)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/remove-user`
@@ -296,15 +272,13 @@ pub async fn remove_user(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminUserIdRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminSuccessResponse>, ApiError> {
+    let res = state
         .service
-        .admin_remove_user(&current_session.user, &payload.user_id)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .remove_user(&current_session.user, &payload.user_id)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/set-user-password`
@@ -312,15 +286,13 @@ pub async fn set_user_password(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminSetUserPasswordRequest>,
-) -> Response {
-    match state
+) -> Result<Json<StatusResponse>, ApiError> {
+    let res = state
         .service
-        .admin_set_user_password(&current_session.user, payload)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .set_user_password(&current_session.user, payload)
+        .await?;
+    Ok(Json(res))
 }
 
 /// `POST /api/auth/admin/has-permission`
@@ -328,13 +300,11 @@ pub async fn user_has_permission(
     State(state): State<AuthState>,
     current_session: CurrentSession,
     Json(payload): Json<AdminHasPermissionRequest>,
-) -> Response {
-    match state
+) -> Result<Json<AdminPermissionResponse>, ApiError> {
+    let res = state
         .service
-        .admin_has_permission(Some(&current_session.user), payload)
-        .await
-    {
-        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
-        Err(err) => error_to_response(err),
-    }
+        .admin()?
+        .has_permission(Some(&current_session.user), payload)
+        .await?;
+    Ok(Json(res))
 }

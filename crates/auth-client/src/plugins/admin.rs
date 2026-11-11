@@ -271,7 +271,8 @@ impl<'a> AdminClientHandle<'a> {
         &self,
         user_id: impl Into<String>,
     ) -> Result<SessionAndUserResponse, ClientError> {
-        self.client
+        let res: SessionAndUserResponse = self
+            .client
             .send_auth_request(
                 Method::POST,
                 "/admin/impersonate-user",
@@ -280,19 +281,32 @@ impl<'a> AdminClientHandle<'a> {
                     user_id: user_id.into(),
                 }),
             )
-            .await
+            .await?;
+        self.client
+            .notify_session_event(crate::plugin::SessionSignalEvent::SessionUpdated {
+                user: res.user.clone(),
+                session: res.session.clone(),
+            });
+        Ok(res)
     }
 
     /// `POST /api/auth/admin/stop-impersonating`
     pub async fn stop_impersonating(&self) -> Result<SessionAndUserResponse, ClientError> {
-        self.client
+        let res: SessionAndUserResponse = self
+            .client
             .send_auth_request(
                 Method::POST,
                 "/admin/stop-impersonating",
                 None::<&()>,
                 None::<&()>,
             )
-            .await
+            .await?;
+        self.client
+            .notify_session_event(crate::plugin::SessionSignalEvent::SessionUpdated {
+                user: res.user.clone(),
+                session: res.session.clone(),
+            });
+        Ok(res)
     }
 
     /// `POST /api/auth/admin/revoke-user-session`

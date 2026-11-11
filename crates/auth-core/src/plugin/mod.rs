@@ -11,7 +11,7 @@ use auth_proto::{SessionWire, UserWire};
 use crate::adapter::{AuthAdapter, BoxFuture};
 use crate::error::AuthError;
 use crate::models::{
-    AdminUpdateUserFields, CreateSessionInput, CreateUserInput, SessionRecord, UserRecord,
+    CreateSessionInput, CreateUserInput, SessionRecord, UpdateUserFields, UserRecord,
 };
 
 pub mod admin;
@@ -51,15 +51,8 @@ impl<T> HookOutcome<T> {
 }
 
 /// Dynamic user update payload passed to `before_update_user` database hooks.
-#[derive(Debug, Clone)]
-pub enum UserUpdatePatch {
-    EmailVerified(bool),
-    Profile {
-        name: Option<String>,
-        image: Option<Option<String>>,
-    },
-    Admin(AdminUpdateUserFields),
-}
+/// Unified with `UpdateUserFields` to avoid fragmented update representations.
+pub type UserUpdatePatch = UpdateUserFields;
 
 /// Database lifecycle hooks matching `BetterAuthOptions["databaseHooks"]`.
 pub trait DatabaseHooks: Send + Sync {
@@ -84,9 +77,9 @@ pub trait DatabaseHooks: Send + Sync {
     fn before_update_user<'a>(
         &'a self,
         _user_id: &'a str,
-        patch: UserUpdatePatch,
+        patch: UpdateUserFields,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<HookOutcome<UserUpdatePatch>, AuthError>> {
+    ) -> BoxFuture<'a, Result<HookOutcome<UpdateUserFields>, AuthError>> {
         Box::pin(async move { Ok(HookOutcome::Continue(patch)) })
     }
 
@@ -231,6 +224,7 @@ pub trait BetterAuthPlugin: Send + Sync + 'static {
 }
 
 /// Object-safe legacy plugin trait for hooking into `AuthService` authentication flows.
+#[deprecated(note = "Implement BetterAuthPlugin and DatabaseHooks instead")]
 pub trait AuthPlugin: Send + Sync {
     /// Unique plugin identifier (e.g. `"two-factor"`, `"api-key"`, `"organization"`).
     fn id(&self) -> &'static str;

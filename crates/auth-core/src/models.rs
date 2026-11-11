@@ -154,9 +154,9 @@ pub struct CreateUserInput {
     pub role: Option<String>,
 }
 
-/// Partial update payload used by Admin plugin operations (`set-role`, `ban-user`, `unban-user`, `update-user`).
+/// Unified user update payload for all user updates (profile, email verification, admin).
 #[derive(Debug, Clone, Default)]
-pub struct AdminUpdateUserFields {
+pub struct UpdateUserFields {
     pub name: Option<String>,
     pub email: Option<String>,
     pub email_verified: Option<bool>,
@@ -166,6 +166,9 @@ pub struct AdminUpdateUserFields {
     pub ban_reason: Option<Option<String>>,
     pub ban_expires: Option<Option<OffsetDateTime>>,
 }
+
+/// Backwards compatibility alias for `UpdateUserFields`.
+pub type AdminUpdateUserFields = UpdateUserFields;
 
 /// Query and pagination options for `AuthAdapter::list_users`.
 #[derive(Debug, Clone, Default)]

@@ -51,7 +51,8 @@ impl<'a> OneTimeTokenClientHandle<'a> {
         &self,
         token: impl Into<String>,
     ) -> Result<SessionAndUserResponse, ClientError> {
-        self.client
+        let res: SessionAndUserResponse = self
+            .client
             .send_auth_request(
                 Method::POST,
                 "/one-time-token/verify",
@@ -60,7 +61,13 @@ impl<'a> OneTimeTokenClientHandle<'a> {
                     token: token.into(),
                 }),
             )
-            .await
+            .await?;
+        self.client
+            .notify_session_event(crate::plugin::SessionSignalEvent::SessionUpdated {
+                user: res.user.clone(),
+                session: res.session.clone(),
+            });
+        Ok(res)
     }
 }
 
