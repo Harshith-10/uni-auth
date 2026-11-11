@@ -12,6 +12,7 @@ pub mod error;
 pub mod models;
 pub mod requests;
 pub mod responses;
+pub mod types;
 pub mod url_utils;
 
 pub use access::{AccessControl, Connector, RolePermissions};
@@ -19,4 +20,5 @@ pub use error::*;
 pub use models::*;
 pub use requests::*;
 pub use responses::*;
+pub use types::*;
 pub use url_utils::*;

@@ -9,16 +9,107 @@ use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use std::net::IpAddr;
 use std::ops::Deref;
+use std::str::FromStr;
 
 use crate::cookies::extract_cookie_token;
 use crate::state::AuthState;
 use auth_core::RequestMeta;
 use auth_proto::{AuthErrorResponse, SessionWire, UserWire, error_codes};
 
-/// Extracts client IP address (`x-forwarded-for` / `x-real-ip`) and `user-agent` from HTTP headers.
-pub fn extract_request_meta(headers: &HeaderMap) -> RequestMeta {
-    let ip_address = headers
+/// IP network CIDR range used for trusted proxy validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IpCidr {
+    V4 { addr: u32, mask: u32 },
+    V6 { addr: u128, mask: u128 },
+}
+
+impl IpCidr {
+    pub fn contains(&self, ip: &IpAddr) -> bool {
+        match (self, ip) {
+            (IpCidr::V4 { addr, mask }, IpAddr::V4(v4)) => {
+                let ip_u32 = u32::from(*v4);
+                (ip_u32 & mask) == (*addr & mask)
+            }
+            (IpCidr::V6 { addr, mask }, IpAddr::V6(v6)) => {
+                let ip_u128 = u128::from(*v6);
+                (ip_u128 & mask) == (*addr & mask)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl FromStr for IpCidr {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        match parts.len() {
+            1 => {
+                let ip: IpAddr = parts[0].trim().parse().map_err(|e| format!("Invalid IP: {e}"))?;
+                match ip {
+                    IpAddr::V4(v4) => Ok(IpCidr::V4 {
+                        addr: u32::from(v4),
+                        mask: u32::MAX,
+                    }),
+                    IpAddr::V6(v6) => Ok(IpCidr::V6 {
+                        addr: u128::from(v6),
+                        mask: u128::MAX,
+                    }),
+                }
+            }
+            2 => {
+                let ip: IpAddr = parts[0].trim().parse().map_err(|e| format!("Invalid IP: {e}"))?;
+                let prefix: u32 = parts[1]
+                    .trim()
+                    .parse()
+                    .map_err(|e| format!("Invalid prefix length: {e}"))?;
+                match ip {
+                    IpAddr::V4(v4) => {
+                        if prefix > 32 {
+                            return Err(format!("IPv4 prefix length must be <= 32, got {prefix}"));
+                        }
+                        let mask = if prefix == 0 {
+                            0
+                        } else {
+                            !((1u32 << (32 - prefix)) - 1)
+                        };
+                        Ok(IpCidr::V4 {
+                            addr: u32::from(v4) & mask,
+                            mask,
+                        })
+                    }
+                    IpAddr::V6(v6) => {
+                        if prefix > 128 {
+                            return Err(format!("IPv6 prefix length must be <= 128, got {prefix}"));
+                        }
+                        let mask = if prefix == 0 {
+                            0
+                        } else {
+                            !((1u128 << (128 - prefix)) - 1)
+                        };
+                        Ok(IpCidr::V6 {
+                            addr: u128::from(v6) & mask,
+                            mask,
+                        })
+                    }
+                }
+            }
+            _ => Err("Invalid CIDR format".to_string()),
+        }
+    }
+}
+
+/// Extracts the client IP address from HTTP headers (`X-Forwarded-For`, `X-Real-IP`),
+/// validating against trusted proxy CIDRs if configured.
+pub fn extract_client_ip(
+    headers: &HeaderMap,
+    peer_ip: Option<IpAddr>,
+    trusted_proxies: &[IpCidr],
+) -> Option<String> {
+    let header_ip = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.split(',').next())
@@ -32,6 +123,31 @@ pub fn extract_request_meta(headers: &HeaderMap) -> RequestMeta {
                 .filter(|s| !s.is_empty())
         });
 
+    match peer_ip {
+        Some(peer) => {
+            if trusted_proxies.is_empty() {
+                header_ip.or_else(|| Some(peer.to_string()))
+            } else {
+                let is_trusted = trusted_proxies.iter().any(|cidr| cidr.contains(&peer));
+                if is_trusted {
+                    header_ip.or_else(|| Some(peer.to_string()))
+                } else {
+                    Some(peer.to_string())
+                }
+            }
+        }
+        None => header_ip,
+    }
+}
+
+/// Extracts client IP address and `user-agent` with optional peer address and trusted proxy validation.
+pub fn extract_request_meta_with_peer(
+    headers: &HeaderMap,
+    peer_ip: Option<IpAddr>,
+    trusted_proxies: &[IpCidr],
+) -> RequestMeta {
+    let ip_address = extract_client_ip(headers, peer_ip, trusted_proxies);
+
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -42,6 +158,11 @@ pub fn extract_request_meta(headers: &HeaderMap) -> RequestMeta {
         ip_address,
         user_agent,
     }
+}
+
+/// Extracts client IP address (`x-forwarded-for` / `x-real-ip`) and `user-agent` from HTTP headers.
+pub fn extract_request_meta(headers: &HeaderMap) -> RequestMeta {
+    extract_request_meta_with_peer(headers, None, &[])
 }
 
 /// Token source origin indicating whether it came from Bearer Authorization header or Cookie.
@@ -124,8 +245,13 @@ where
             ExtractedToken::Bearer(tok) => tok,
             ExtractedToken::Cookie(signed_cookie) => {
                 // Cookies must carry a valid HMAC signature
-                if auth_state.service.verify_signed_token(&signed_cookie).is_none() {
-                    let err = AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
+                if auth_state
+                    .service
+                    .verify_signed_token(&signed_cookie)
+                    .is_none()
+                {
+                    let err =
+                        AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
                     return Err((StatusCode::UNAUTHORIZED, Json(err)).into_response());
                 }
                 signed_cookie
@@ -213,7 +339,11 @@ where
         let token = match extracted {
             ExtractedToken::Bearer(tok) => tok,
             ExtractedToken::Cookie(signed_cookie) => {
-                if auth_state.service.verify_signed_token(&signed_cookie).is_none() {
+                if auth_state
+                    .service
+                    .verify_signed_token(&signed_cookie)
+                    .is_none()
+                {
                     return Ok(OptionalSession(None));
                 }
                 signed_cookie

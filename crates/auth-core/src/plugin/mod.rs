@@ -4,7 +4,11 @@
 //! declarative migrations (`PluginMigration`), rate limiting rules (`PluginRateLimitRule`), and typed
 //! plugin downcasting.
 
+use std::any::Any;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use auth_proto::{SessionWire, UserWire};
 
@@ -13,6 +17,57 @@ use crate::error::AuthError;
 use crate::models::{
     CreateSessionInput, CreateUserInput, SessionRecord, UpdateUserFields, UserRecord,
 };
+
+/// Allocation-free hook future that avoids heap allocations on no-op default hooks.
+pub enum HookFuture<'a, T> {
+    Ready(Option<Result<T, AuthError>>),
+    Boxed(BoxFuture<'a, Result<T, AuthError>>),
+}
+
+impl<'a, T> HookFuture<'a, T> {
+    #[inline]
+    pub fn ready_ok(val: T) -> Self {
+        Self::Ready(Some(Ok(val)))
+    }
+
+    #[inline]
+    pub fn ready_err(err: AuthError) -> Self {
+        Self::Ready(Some(Err(err)))
+    }
+
+    #[inline]
+    pub fn boxed(fut: BoxFuture<'a, Result<T, AuthError>>) -> Self {
+        Self::Boxed(fut)
+    }
+}
+
+impl<'a, T: Unpin> Future for HookFuture<'a, T> {
+    type Output = Result<T, AuthError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::into_inner(self) {
+            HookFuture::Ready(val) => {
+                Poll::Ready(val.take().expect("HookFuture polled after completion"))
+            }
+            HookFuture::Boxed(fut) => fut.as_mut().poll(cx),
+        }
+    }
+}
+
+impl<'a, T> From<BoxFuture<'a, Result<T, AuthError>>> for HookFuture<'a, T> {
+    fn from(fut: BoxFuture<'a, Result<T, AuthError>>) -> Self {
+        Self::Boxed(fut)
+    }
+}
+
+/// Trait for plugins that declare HTTP routes without requiring hardcoded downcasting.
+pub trait PluginRouteProvider: Send + Sync {
+    /// Unique plugin identifier matching `BetterAuthPlugin::id`.
+    fn route_plugin_id(&self) -> &'static str;
+
+    /// Builds the plugin router for the given application state (passed as `&dyn Any`).
+    fn build_router_any(&self, state_any: &dyn Any) -> Option<Box<dyn Any>>;
+}
 
 pub mod admin;
 pub mod bearer;
@@ -62,16 +117,16 @@ pub trait DatabaseHooks: Send + Sync {
         &'a self,
         input: CreateUserInput,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<HookOutcome<CreateUserInput>, AuthError>> {
-        Box::pin(async move { Ok(HookOutcome::Continue(input)) })
+    ) -> HookFuture<'a, HookOutcome<CreateUserInput>> {
+        HookFuture::ready_ok(HookOutcome::Continue(input))
     }
 
     fn after_create_user<'a>(
         &'a self,
         _user: &'a UserRecord,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<(), AuthError>> {
-        Box::pin(async { Ok(()) })
+    ) -> HookFuture<'a, ()> {
+        HookFuture::ready_ok(())
     }
 
     fn before_update_user<'a>(
@@ -79,32 +134,32 @@ pub trait DatabaseHooks: Send + Sync {
         _user_id: &'a str,
         patch: UpdateUserFields,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<HookOutcome<UpdateUserFields>, AuthError>> {
-        Box::pin(async move { Ok(HookOutcome::Continue(patch)) })
+    ) -> HookFuture<'a, HookOutcome<UpdateUserFields>> {
+        HookFuture::ready_ok(HookOutcome::Continue(patch))
     }
 
     fn after_update_user<'a>(
         &'a self,
         _user: &'a UserRecord,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<(), AuthError>> {
-        Box::pin(async { Ok(()) })
+    ) -> HookFuture<'a, ()> {
+        HookFuture::ready_ok(())
     }
 
     fn before_delete_user<'a>(
         &'a self,
         _user: &'a UserRecord,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<bool, AuthError>> {
-        Box::pin(async { Ok(true) })
+    ) -> HookFuture<'a, bool> {
+        HookFuture::ready_ok(true)
     }
 
     fn after_delete_user<'a>(
         &'a self,
         _user_id: &'a str,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<(), AuthError>> {
-        Box::pin(async { Ok(()) })
+    ) -> HookFuture<'a, ()> {
+        HookFuture::ready_ok(())
     }
 
     // ── Session Hooks ──
@@ -113,32 +168,32 @@ pub trait DatabaseHooks: Send + Sync {
         &'a self,
         input: CreateSessionInput,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<HookOutcome<CreateSessionInput>, AuthError>> {
-        Box::pin(async move { Ok(HookOutcome::Continue(input)) })
+    ) -> HookFuture<'a, HookOutcome<CreateSessionInput>> {
+        HookFuture::ready_ok(HookOutcome::Continue(input))
     }
 
     fn after_create_session<'a>(
         &'a self,
         _session: &'a SessionRecord,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<(), AuthError>> {
-        Box::pin(async { Ok(()) })
+    ) -> HookFuture<'a, ()> {
+        HookFuture::ready_ok(())
     }
 
     fn before_delete_session<'a>(
         &'a self,
         _token: &'a str,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<bool, AuthError>> {
-        Box::pin(async { Ok(true) })
+    ) -> HookFuture<'a, bool> {
+        HookFuture::ready_ok(true)
     }
 
     fn after_delete_session<'a>(
         &'a self,
         _token: &'a str,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<(), AuthError>> {
-        Box::pin(async { Ok(()) })
+    ) -> HookFuture<'a, ()> {
+        HookFuture::ready_ok(())
     }
 }
 
@@ -148,8 +203,8 @@ pub struct EndpointHookContext {
     /// Normalized endpoint path relative to `/api/auth` (e.g., `"/list-sessions"`, `"/sign-in/email"`).
     pub path: String,
     pub method: String,
-    pub request_headers: std::collections::HashMap<String, String>,
-    pub response_headers: std::collections::HashMap<String, String>,
+    pub request_headers: http::HeaderMap,
+    pub response_headers: http::HeaderMap,
     /// JSON response body (populated in `after_endpoint` hooks so plugins can filter/transform JSON).
     pub response_body: Option<serde_json::Value>,
     /// Populated when a new session was just created during this request.
@@ -183,6 +238,11 @@ pub trait BetterAuthPlugin: Send + Sync + 'static {
 
     /// Optional database lifecycle hooks (`user`, `session`, `account`, `verification`).
     fn database_hooks(&self) -> Option<Arc<dyn DatabaseHooks>> {
+        None
+    }
+
+    /// Optional generic route provider for declaring Axum routes.
+    fn route_provider(&self) -> Option<Arc<dyn PluginRouteProvider>> {
         None
     }
 

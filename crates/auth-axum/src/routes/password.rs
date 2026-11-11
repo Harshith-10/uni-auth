@@ -1,13 +1,16 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
 
 use crate::error_to_response;
-use crate::extract::FreshSession;
+use crate::extract::{CurrentSession, FreshSession};
 use crate::state::AuthState;
-use auth_proto::{ChangePasswordRequest, RequestPasswordResetRequest, ResetPasswordRequest};
+use auth_proto::{
+    ChangePasswordRequest, RequestPasswordResetRequest, ResetPasswordRequest, SetPasswordRequest,
+    VerifyPasswordRequest,
+};
 
 pub async fn request_password_reset(
     State(state): State<AuthState>,
@@ -56,13 +59,47 @@ pub struct ResetPasswordPostQuery {
 
 pub async fn reset_password(
     State(state): State<AuthState>,
+    headers: HeaderMap,
     Query(query): Query<ResetPasswordPostQuery>,
     Json(mut payload): Json<ResetPasswordRequest>,
 ) -> Response {
     if payload.token.is_none() || payload.token.as_deref() == Some("") {
         payload.token = query.token;
     }
-    match state.service.reset_password(payload).await {
+    let meta = crate::extract::extract_request_meta_with_peer(&headers, None, &state.trusted_proxies);
+    match state.service.reset_password_with_meta(payload, meta).await {
+        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Err(err) => error_to_response(err),
+    }
+}
+
+/// `POST /api/auth/set-password` (sets initial password for passwordless users)
+pub async fn set_password(
+    State(state): State<AuthState>,
+    current_session: CurrentSession,
+    Json(payload): Json<SetPasswordRequest>,
+) -> Response {
+    match state
+        .service
+        .set_password(&current_session.user.id, payload)
+        .await
+    {
+        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Err(err) => error_to_response(err),
+    }
+}
+
+/// `POST /api/auth/verify-password` (stateless verification of current password)
+pub async fn verify_password(
+    State(state): State<AuthState>,
+    current_session: CurrentSession,
+    Json(payload): Json<VerifyPasswordRequest>,
+) -> Response {
+    match state
+        .service
+        .verify_password(&current_session.user.id, payload)
+        .await
+    {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),
         Err(err) => error_to_response(err),
     }

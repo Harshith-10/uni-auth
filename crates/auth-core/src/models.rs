@@ -106,8 +106,14 @@ impl std::fmt::Debug for AccountRecord {
             .field("user_id", &self.user_id)
             .field("account_id", &self.account_id)
             .field("provider_id", &self.provider_id)
-            .field("access_token", &self.access_token.as_ref().map(|_| "[REDACTED]"))
-            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("id_token", &self.id_token.as_ref().map(|_| "[REDACTED]"))
             .field("access_token_expires_at", &self.access_token_expires_at)
             .field("refresh_token_expires_at", &self.refresh_token_expires_at)
@@ -174,17 +180,87 @@ pub struct CreateUserInput {
     pub role: Option<String>,
 }
 
+/// Tri-state update enum replacing fragile nested `Option<Option<T>>` patterns.
+///
+/// Distinguishes between:
+/// - `Unchanged`: Do not modify this column.
+/// - `Set(T)`: Update this column to value `T`.
+/// - `Clear`: Set this nullable column to `NULL`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FieldUpdate<T> {
+    #[default]
+    Unchanged,
+    Set(T),
+    Clear,
+}
+
+impl<T> FieldUpdate<T> {
+    pub fn is_changed(&self) -> bool {
+        !matches!(self, Self::Unchanged)
+    }
+
+    pub fn is_set(&self) -> bool {
+        matches!(self, Self::Set(_))
+    }
+
+    pub fn is_clear(&self) -> bool {
+        matches!(self, Self::Clear)
+    }
+
+    pub fn apply_to(self, target: &mut Option<T>) {
+        match self {
+            Self::Unchanged => {}
+            Self::Set(val) => *target = Some(val),
+            Self::Clear => *target = None,
+        }
+    }
+
+    pub fn as_ref(&self) -> Option<&T> {
+        match self {
+            Self::Set(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> FieldUpdate<U> {
+        match self {
+            Self::Unchanged => FieldUpdate::Unchanged,
+            Self::Set(val) => FieldUpdate::Set(f(val)),
+            Self::Clear => FieldUpdate::Clear,
+        }
+    }
+}
+
+impl<T> From<Option<Option<T>>> for FieldUpdate<T> {
+    fn from(opt: Option<Option<T>>) -> Self {
+        match opt {
+            None => Self::Unchanged,
+            Some(Some(val)) => Self::Set(val),
+            Some(None) => Self::Clear,
+        }
+    }
+}
+
+impl<T> From<Option<T>> for FieldUpdate<T> {
+    fn from(opt: Option<T>) -> Self {
+        match opt {
+            Some(val) => Self::Set(val),
+            None => Self::Unchanged,
+        }
+    }
+}
+
 /// Unified user update payload for all user updates (profile, email verification, admin).
 #[derive(Debug, Clone, Default)]
 pub struct UpdateUserFields {
     pub name: Option<String>,
     pub email: Option<String>,
     pub email_verified: Option<bool>,
-    pub image: Option<Option<String>>,
+    pub image: FieldUpdate<String>,
     pub role: Option<String>,
     pub banned: Option<bool>,
-    pub ban_reason: Option<Option<String>>,
-    pub ban_expires: Option<Option<OffsetDateTime>>,
+    pub ban_reason: FieldUpdate<String>,
+    pub ban_expires: FieldUpdate<OffsetDateTime>,
 }
 
 /// Backwards compatibility alias for `UpdateUserFields`.

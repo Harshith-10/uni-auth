@@ -158,7 +158,7 @@ async fn seed_demo_accounts(service: &AuthService) -> Result<(), Box<dyn std::er
                     &created.user.id,
                     AdminUpdateUserFields {
                         banned: Some(true),
-                        ban_reason: Some(acct.ban_reason.map(|s| s.to_string())),
+                        ban_reason: Some(acct.ban_reason.map(|s| s.to_string())).into(),
                         ..Default::default()
                     },
                 )

@@ -99,7 +99,9 @@ impl AuthAdapter for HookedAdapter {
                 }
             }
 
-            let (user, account) = inner.create_user_with_account(current, account_input).await?;
+            let (user, account) = inner
+                .create_user_with_account(current, account_input)
+                .await?;
 
             for hook in &hooks {
                 if let Err(err) = hook.after_create_user(&user, &*inner).await {
@@ -190,7 +192,7 @@ impl AuthAdapter for HookedAdapter {
             id,
             UpdateUserFields {
                 name,
-                image,
+                image: image.into(),
                 ..Default::default()
             },
         )

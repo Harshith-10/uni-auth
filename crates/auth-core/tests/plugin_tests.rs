@@ -4,11 +4,11 @@ use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use auth_core::adapter::{AuthAdapter, BoxFuture};
+use auth_core::adapter::AuthAdapter;
 use auth_core::error::AuthError;
 use auth_core::models::*;
 use auth_core::plugin::{
-    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookOutcome, PluginMigration,
+    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookFuture, HookOutcome, PluginMigration,
     PluginRateLimitRule, UserUpdatePatch,
 };
 use auth_core::{
@@ -31,14 +31,14 @@ struct CustomHooks {
 }
 
 impl DatabaseHooks for CustomHooks {
-    fn before_create_user(
-        &self,
+    fn before_create_user<'a>(
+        &'a self,
         mut input: CreateUserInput,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<HookOutcome<CreateUserInput>, AuthError>> {
+        _adapter: &'a dyn AuthAdapter,
+    ) -> HookFuture<'a, HookOutcome<CreateUserInput>> {
         let cancel = self.cancel_create_user.load(Ordering::SeqCst);
         let override_role = self.override_role_on_create.load(Ordering::SeqCst);
-        Box::pin(async move {
+        HookFuture::boxed(Box::pin(async move {
             if cancel {
                 return Ok(HookOutcome::Cancel);
             }
@@ -47,25 +47,25 @@ impl DatabaseHooks for CustomHooks {
                 return Ok(HookOutcome::Modified(input));
             }
             Ok(HookOutcome::Continue(input))
-        })
+        }))
     }
 
-    fn after_create_user(
-        &self,
-        _user: &UserRecord,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn after_create_user<'a>(
+        &'a self,
+        _user: &'a UserRecord,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> HookFuture<'a, ()> {
         self.created_users.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(()) })
+        HookFuture::ready_ok(())
     }
 
-    fn before_create_session(
-        &self,
+    fn before_create_session<'a>(
+        &'a self,
         input: CreateSessionInput,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<HookOutcome<CreateSessionInput>, AuthError>> {
+        _adapter: &'a dyn AuthAdapter,
+    ) -> HookFuture<'a, HookOutcome<CreateSessionInput>> {
         let reject = self.reject_session_with_banned.load(Ordering::SeqCst);
-        Box::pin(async move {
+        HookFuture::boxed(Box::pin(async move {
             if reject {
                 return Err(AuthError::forbidden(
                     "BANNED_USER",
@@ -73,41 +73,41 @@ impl DatabaseHooks for CustomHooks {
                 ));
             }
             Ok(HookOutcome::Continue(input))
-        })
+        }))
     }
 
-    fn after_create_session(
-        &self,
-        _session: &SessionRecord,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn after_create_session<'a>(
+        &'a self,
+        _session: &'a SessionRecord,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> HookFuture<'a, ()> {
         self.created_sessions.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(()) })
+        HookFuture::ready_ok(())
     }
 
-    fn before_delete_user(
-        &self,
-        _user: &UserRecord,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<bool, AuthError>> {
+    fn before_delete_user<'a>(
+        &'a self,
+        _user: &'a UserRecord,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> HookFuture<'a, bool> {
         let prevent = self.prevent_delete_user.load(Ordering::SeqCst);
-        Box::pin(async move { Ok(!prevent) })
+        HookFuture::ready_ok(!prevent)
     }
 
-    fn before_update_user(
-        &self,
-        _user_id: &str,
+    fn before_update_user<'a>(
+        &'a self,
+        _user_id: &'a str,
         mut patch: UserUpdatePatch,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<HookOutcome<UserUpdatePatch>, AuthError>> {
-        Box::pin(async move {
+        _adapter: &'a dyn AuthAdapter,
+    ) -> HookFuture<'a, HookOutcome<UserUpdatePatch>> {
+        HookFuture::boxed(Box::pin(async move {
             if patch.name.is_some() {
                 patch.name = Some("Overridden Name".to_string());
                 Ok(HookOutcome::Modified(patch))
             } else {
                 Ok(HookOutcome::Continue(patch))
             }
-        })
+        }))
     }
 }
 
@@ -372,12 +372,15 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
 
     // 1. Before endpoint hook: convert Bearer token to cookie header
     let raw_token = "raw_sample_session_token_12345";
+    let mut req_headers = http::HeaderMap::new();
+    req_headers.insert(
+        http::header::AUTHORIZATION,
+        format!("Bearer {raw_token}").parse().unwrap(),
+    );
     let mut ctx = EndpointHookContext {
         path: "/api/saas/me".to_string(),
         method: "GET".to_string(),
-        request_headers: [("authorization".to_string(), format!("Bearer {raw_token}"))]
-            .into_iter()
-            .collect(),
+        request_headers: req_headers,
         response_headers: Default::default(),
         response_body: None,
         new_session: None,
@@ -389,9 +392,9 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
         .await
         .unwrap();
 
-    let cookie_val = ctx.request_headers.get("cookie");
+    let cookie_val = ctx.request_headers.get(http::header::COOKIE);
     assert!(cookie_val.is_some());
-    let cookie = cookie_val.unwrap();
+    let cookie = cookie_val.unwrap().to_str().unwrap();
     assert!(cookie.contains("better-auth.session_token="));
     assert!(cookie.contains(raw_token));
 
@@ -401,12 +404,15 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
             require_signature: true,
         },
     };
+    let mut strict_headers = http::HeaderMap::new();
+    strict_headers.insert(
+        http::header::AUTHORIZATION,
+        format!("Bearer {raw_token}").parse().unwrap(),
+    );
     let mut strict_ctx = EndpointHookContext {
         path: "/api/saas/me".to_string(),
         method: "GET".to_string(),
-        request_headers: [("authorization".to_string(), format!("Bearer {raw_token}"))]
-            .into_iter()
-            .collect(),
+        request_headers: strict_headers,
         response_headers: Default::default(),
         response_body: None,
         new_session: None,
@@ -415,19 +421,21 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
         .on_before_endpoint(&mut strict_ctx, &service)
         .await
         .unwrap();
-    assert!(!strict_ctx.request_headers.contains_key("cookie"));
+    assert!(strict_ctx.request_headers.get(http::header::COOKIE).is_none());
 
     // 3. After endpoint hook: Set-Cookie in response emits set-auth-token and exposes header
+    let mut after_headers = http::HeaderMap::new();
+    after_headers.insert(
+        http::header::SET_COOKIE,
+        format!("better-auth.session_token={raw_token}; Path=/; HttpOnly")
+            .parse()
+            .unwrap(),
+    );
     let mut after_ctx = EndpointHookContext {
         path: "/sign-in/email".to_string(),
         method: "POST".to_string(),
         request_headers: Default::default(),
-        response_headers: [(
-            "set-cookie".to_string(),
-            format!("better-auth.session_token={raw_token}; Path=/; HttpOnly"),
-        )]
-        .into_iter()
-        .collect(),
+        response_headers: after_headers,
         response_body: None,
         new_session: None,
     };
@@ -438,7 +446,12 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
         .unwrap();
 
     assert_eq!(
-        after_ctx.response_headers.get("set-auth-token").unwrap(),
+        after_ctx
+            .response_headers
+            .get("set-auth-token")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         raw_token
     );
     assert!(
@@ -446,20 +459,24 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
             .response_headers
             .get("access-control-expose-headers")
             .unwrap()
+            .to_str()
+            .unwrap()
             .contains("set-auth-token")
     );
 
     // 4. Cleared cookie (Max-Age=0) must NOT emit set-auth-token
+    let mut clear_headers = http::HeaderMap::new();
+    clear_headers.insert(
+        http::header::SET_COOKIE,
+        "better-auth.session_token=; Max-Age=0; Path=/"
+            .parse()
+            .unwrap(),
+    );
     let mut clear_ctx = EndpointHookContext {
         path: "/sign-out".to_string(),
         method: "POST".to_string(),
         request_headers: Default::default(),
-        response_headers: [(
-            "set-cookie".to_string(),
-            "better-auth.session_token=; Max-Age=0; Path=/".to_string(),
-        )]
-        .into_iter()
-        .collect(),
+        response_headers: clear_headers,
         response_body: None,
         new_session: None,
     };
@@ -559,6 +576,8 @@ async fn test_one_time_token_plugin_atomic_consumption_and_hashing() {
         session_ctx
             .response_headers
             .get("access-control-expose-headers")
+            .unwrap()
+            .to_str()
             .unwrap()
             .contains("set-ott")
     );
@@ -681,12 +700,12 @@ async fn test_unified_update_user_adapter_and_hooks() {
     let patch = UpdateUserFields {
         name: Some("Updated Name".to_string()),
         email: None,
-        image: Some(Some("https://avatar.com/1.png".to_string())),
+        image: FieldUpdate::Set("https://avatar.com/1.png".to_string()),
         email_verified: Some(true),
         role: Some("admin".to_string()),
         banned: Some(true),
-        ban_reason: Some(Some("spamming".to_string())),
-        ban_expires: None,
+        ban_reason: FieldUpdate::Set("spamming".to_string()),
+        ban_expires: FieldUpdate::Unchanged,
     };
 
     let updated = adapter.update_user(&user.id, patch).await.unwrap();

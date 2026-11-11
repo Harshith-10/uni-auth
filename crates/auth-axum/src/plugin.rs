@@ -105,18 +105,11 @@ pub async fn endpoint_hooks_middleware(
         return crate::error::error_to_response(err);
     }
 
-    let mut request_headers = std::collections::HashMap::new();
-    for (name, value) in req.headers() {
-        if let Ok(v_str) = value.to_str() {
-            request_headers.insert(name.as_str().to_lowercase(), v_str.to_string());
-        }
-    }
-
     let mut ctx = EndpointHookContext {
         path,
         method,
-        request_headers,
-        response_headers: std::collections::HashMap::new(),
+        request_headers: req.headers().clone(),
+        response_headers: http::HeaderMap::new(),
         response_body: None,
         new_session: None,
     };
@@ -130,14 +123,7 @@ pub async fn endpoint_hooks_middleware(
         return crate::error::error_to_response(err);
     }
 
-    for (k, v) in &ctx.request_headers {
-        if let (Ok(hname), Ok(hval)) = (
-            http::header::HeaderName::from_bytes(k.as_bytes()),
-            http::header::HeaderValue::from_str(v),
-        ) {
-            req.headers_mut().insert(hname, hval);
-        }
-    }
+    *req.headers_mut() = ctx.request_headers.clone();
 
     let response = next.run(req).await;
 
@@ -153,15 +139,9 @@ pub async fn endpoint_hooks_middleware(
         return response;
     }
 
-    // 1. Copy outgoing response headers into ctx.response_headers
-    for (name, value) in response.headers() {
-        if let Ok(v_str) = value.to_str() {
-            ctx.response_headers
-                .insert(name.as_str().to_lowercase(), v_str.to_string());
-        }
-    }
+    ctx.response_headers = response.headers().clone();
 
-    // 2. Extract NewSessionExt if a new session was issued during this request
+    // Extract NewSessionExt if a new session was issued during this request
     if let Some(crate::state::NewSessionExt(ses, usr)) = response
         .extensions()
         .get::<crate::state::NewSessionExt>()
@@ -170,7 +150,6 @@ pub async fn endpoint_hooks_middleware(
         ctx.new_session = Some((ses, usr));
     }
 
-    // 3. Buffer JSON body if content-type is application/json so after-hooks can inspect/filter it
     let (mut parts, body) = response.into_parts();
     let is_json = parts
         .headers
@@ -179,8 +158,8 @@ pub async fn endpoint_hooks_middleware(
         .map(|ct| ct.contains("application/json"))
         .unwrap_or(false);
 
-    let body_bytes = if is_json {
-        match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
+    let final_body = if is_json {
+        let body_bytes = match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
             Ok(b) => {
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&b) {
                     ctx.response_body = Some(val);
@@ -188,42 +167,66 @@ pub async fn endpoint_hooks_middleware(
                 b
             }
             Err(_) => axum::body::Bytes::new(),
+        };
+
+        if let Err(err) = state
+            .service
+            .plugins()
+            .run_after_endpoint(&mut ctx, &state.service)
+            .await
+        {
+            return crate::error::error_to_response(err);
+        }
+
+        parts.headers = ctx.response_headers;
+
+        if let Some(modified_json) = ctx.response_body {
+            parts.headers.remove(http::header::CONTENT_LENGTH);
+            let vec = serde_json::to_vec(&modified_json).unwrap_or_else(|_| body_bytes.to_vec());
+            axum::body::Body::from(vec)
+        } else {
+            axum::body::Body::from(body_bytes)
         }
     } else {
-        match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
-            Ok(b) => b,
-            Err(_) => axum::body::Bytes::new(),
+        // Gated: non-JSON responses do NOT buffer body into memory
+        if let Err(err) = state
+            .service
+            .plugins()
+            .run_after_endpoint(&mut ctx, &state.service)
+            .await
+        {
+            return crate::error::error_to_response(err);
         }
+        parts.headers = ctx.response_headers;
+        body
     };
 
-    if let Err(err) = state
-        .service
-        .plugins()
-        .run_after_endpoint(&mut ctx, &state.service)
-        .await
-    {
-        return crate::error::error_to_response(err);
+    Response::from_parts(parts, final_body)
+}
+
+/// Adapter allowing any `AxumAuthPlugin` to implement `PluginRouteProvider` from `auth-core`.
+pub struct AxumPluginRouteAdapter<P: AxumAuthPlugin> {
+    pub plugin: Arc<P>,
+}
+
+impl<P: AxumAuthPlugin + 'static> AxumPluginRouteAdapter<P> {
+    pub fn new(plugin: Arc<P>) -> Self {
+        Self { plugin }
+    }
+}
+
+impl<P: AxumAuthPlugin + 'static> auth_core::plugin::PluginRouteProvider for AxumPluginRouteAdapter<P> {
+    fn route_plugin_id(&self) -> &'static str {
+        self.plugin.plugin_id()
     }
 
-    for (k, v) in ctx.response_headers {
-        if let (Ok(hname), Ok(hval)) = (
-            http::header::HeaderName::from_bytes(k.as_bytes()),
-            http::header::HeaderValue::from_str(&v),
-        ) {
-            parts.headers.insert(hname, hval);
+    fn build_router_any(&self, state_any: &dyn std::any::Any) -> Option<Box<dyn std::any::Any>> {
+        if let Some(_state) = state_any.downcast_ref::<AuthState>() {
+            Some(Box::new(self.plugin.router()))
+        } else {
+            None
         }
     }
-
-    let final_bytes = if let Some(modified_json) = ctx.response_body {
-        parts.headers.remove(http::header::CONTENT_LENGTH);
-        serde_json::to_vec(&modified_json)
-            .map(axum::body::Bytes::from)
-            .unwrap_or(body_bytes)
-    } else {
-        body_bytes
-    };
-
-    Response::from_parts(parts, axum::body::Body::from(final_bytes))
 }
 
 impl AxumAuthPlugin for OneTimeTokenPlugin {

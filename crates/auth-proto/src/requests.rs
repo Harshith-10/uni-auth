@@ -511,3 +511,52 @@ pub struct AdminHasPermissionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connector: Option<String>,
 }
+
+// ──────────────────────────────────────────────
+// Secondary Feature Parity Requests
+// ──────────────────────────────────────────────
+
+/// Payload for `POST /set-password` (setting password for passwordless OAuth users).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPasswordRequest {
+    #[serde(alias = "new_password")]
+    pub new_password: String,
+}
+
+/// Payload for `POST /verify-password` (stateless verification of current password).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyPasswordRequest {
+    pub password: String,
+}
+
+/// Payload for `POST /change-email` (initiating email change).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeEmailRequest {
+    #[serde(alias = "new_email")]
+    pub new_email: String,
+    #[serde(default, alias = "callbackURL", alias = "callback_url")]
+    pub callback_url: Option<String>,
+}
+
+/// Payload for `POST /update-session` (updating session metadata).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSessionRequest {
+    #[serde(flatten)]
+    pub additional_fields: HashMap<String, serde_json::Value>,
+}
+
+/// Selection criteria for OAuth tokens and account info.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAccountSelectionRequest {
+    #[serde(default, alias = "user_id")]
+    pub user_id: Option<String>,
+    #[serde(default, alias = "provider_id", alias = "providerId")]
+    pub provider_id: Option<String>,
+    #[serde(default, alias = "account_id", alias = "accountId")]
+    pub account_id: Option<String>,
+}

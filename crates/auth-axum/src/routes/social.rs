@@ -8,7 +8,10 @@ use crate::error_to_response;
 use crate::extract::{CurrentSession, FreshSession, extract_request_meta};
 use crate::state::AuthState;
 use auth_core::OAuthCallbackResult;
-use auth_proto::{AuthErrorResponse, LinkSocialRequest, SignInSocialRequest, UnlinkAccountRequest};
+use auth_proto::{
+    AuthErrorResponse, LinkSocialRequest, OAuthAccountSelectionRequest, SignInSocialRequest,
+    UnlinkAccountRequest,
+};
 
 pub async fn sign_in_social(
     State(state): State<AuthState>,
@@ -115,6 +118,9 @@ pub struct OAuthCallbackQuery {
 }
 
 fn is_loopback_ott_callback(url: &str) -> bool {
+    if !crate::middleware::is_loopback_url(url) {
+        return false;
+    }
     let without_query = url.split('?').next().unwrap_or(url).trim_end_matches('/');
     without_query.ends_with("/auth/callback") || url.contains("loopback=1")
 }
@@ -312,6 +318,54 @@ pub async fn unlink_account(
     match state
         .service
         .unlink_account(&fresh_session.user.id, &payload.provider_id, account_id)
+        .await
+    {
+        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Err(err) => error_to_response(err),
+    }
+}
+
+/// `POST /api/auth/get-access-token`
+pub async fn get_access_token(
+    State(state): State<AuthState>,
+    current_session: CurrentSession,
+    Json(payload): Json<OAuthAccountSelectionRequest>,
+) -> Response {
+    match state
+        .service
+        .get_access_token(&current_session.user.id, payload)
+        .await
+    {
+        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Err(err) => error_to_response(err),
+    }
+}
+
+/// `POST /api/auth/refresh-token`
+pub async fn refresh_token(
+    State(state): State<AuthState>,
+    current_session: CurrentSession,
+    Json(payload): Json<OAuthAccountSelectionRequest>,
+) -> Response {
+    match state
+        .service
+        .refresh_token(&current_session.user.id, payload)
+        .await
+    {
+        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Err(err) => error_to_response(err),
+    }
+}
+
+/// `GET /api/auth/account-info`
+pub async fn get_account_info(
+    State(state): State<AuthState>,
+    current_session: CurrentSession,
+    Query(query): Query<OAuthAccountSelectionRequest>,
+) -> Response {
+    match state
+        .service
+        .get_account_info(&current_session.user.id, query)
         .await
     {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),

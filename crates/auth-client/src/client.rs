@@ -11,12 +11,12 @@ use auth_proto::access::Connector;
 use auth_proto::{
     AccountListEntryWire, AdminCreateUserRequest, AdminHasPermissionRequest, AdminListUsersQuery,
     AdminListUsersResponse, AdminPermissionResponse, AdminSuccessResponse, AdminUpdateUserRequest,
-    AdminUserResponse, ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest, DeleteUserResponse,
-    OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest,
-    RevokeSessionRequest, RoleValue, SendVerificationEmailRequest, SessionAndUserResponse,
-    SessionWire, SignInEmailRequest, SignInResponse, SignInSocialRequest, SignInSocialResponse,
-    SignOutResponse, SignUpEmailRequest, SignUpResponse, StatusResponse, UnlinkAccountRequest,
-    UpdateUserRequest, UpdateUserResponse, UserWire, VerifyEmailResponse,
+    AdminUserResponse, ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest,
+    DeleteUserResponse, OneTimeTokenGenerateResponse, RequestPasswordResetRequest,
+    ResetPasswordRequest, RevokeSessionRequest, RoleValue, SendVerificationEmailRequest,
+    SessionAndUserResponse, SessionWire, SignInEmailRequest, SignInResponse, SignInSocialRequest,
+    SignInSocialResponse, SignOutResponse, SignUpEmailRequest, SignUpResponse, StatusResponse,
+    UnlinkAccountRequest, UpdateUserRequest, UpdateUserResponse, UserWire, VerifyEmailResponse,
 };
 
 use crate::plugin::{

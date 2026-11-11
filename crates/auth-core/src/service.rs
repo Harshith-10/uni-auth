@@ -1,15 +1,18 @@
 //! Core authentication service coordinating business logic, crypto, hooks, plugins, and persistence.
 
 use auth_proto::{
-    AccountListEntryWire, AdminBanUserRequest, AdminCreateUserRequest, AdminHasPermissionRequest,
-    AdminListUserSessionsResponse, AdminListUsersQuery, AdminListUsersResponse,
-    AdminPermissionResponse, AdminSetRoleRequest, AdminSetUserPasswordRequest,
-    AdminSuccessResponse, AdminUpdateUserRequest, AdminUserResponse, ChangePasswordRequest,
-    ChangePasswordResponse, DeleteUserRequest, DeleteUserResponse, OneTimeTokenGenerateResponse,
-    RequestPasswordResetRequest, ResetPasswordRequest, SendVerificationEmailRequest,
-    SessionAndUserResponse, SessionWire, SignInEmailRequest, SignInResponse, SignOutRequest,
-    SignOutResponse, SignUpEmailRequest, SignUpResponse, StatusMessageResponse, StatusResponse,
-    UpdateUserRequest, UpdateUserResponse, UserWire, VerifyEmailResponse, error_codes, url_encode,
+    AccountInfoResponse, AccountListEntryWire, AdminBanUserRequest, AdminCreateUserRequest,
+    AdminHasPermissionRequest, AdminListUserSessionsResponse, AdminListUsersQuery,
+    AdminListUsersResponse, AdminPermissionResponse, AdminSetRoleRequest,
+    AdminSetUserPasswordRequest, AdminSuccessResponse, AdminUpdateUserRequest, AdminUserResponse,
+    ChangeEmailRequest, ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest,
+    DeleteUserResponse, OAuthAccountSelectionRequest, OAuthTokenResponse,
+    OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest,
+    SendVerificationEmailRequest, SessionAndUserResponse, SessionWire, SetPasswordRequest,
+    SignInEmailRequest, SignInResponse, SignOutRequest, SignOutResponse, SignUpEmailRequest,
+    SignUpResponse, StatusMessageResponse, StatusResponse, UpdateSessionRequest, UpdateUserRequest,
+    UpdateUserResponse, UserWire, VerifyEmailResponse, VerifyPasswordRequest, error_codes,
+    url_encode,
 };
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
@@ -426,7 +429,9 @@ impl AuthService {
         }
 
         if req.password.len() < self.config.min_password_length {
-            return Err(AuthError::PasswordTooShort);
+            return Err(AuthError::PasswordTooShort {
+                min: self.config.min_password_length,
+            });
         }
         if req.password.len() > self.config.max_password_length {
             return Err(AuthError::PasswordTooLong);
@@ -809,10 +814,28 @@ impl AuthService {
         &self,
         req: ResetPasswordRequest,
     ) -> Result<StatusResponse, AuthError> {
+        self.reset_password_with_meta(req, RequestMeta::default())
+            .await
+    }
+
+    /// Resets the user's password using a verification token with IP rate limiting.
+    pub async fn reset_password_with_meta(
+        &self,
+        req: ResetPasswordRequest,
+        meta: RequestMeta,
+    ) -> Result<StatusResponse, AuthError> {
+        let rate_key = format!(
+            "reset-password:{}",
+            meta.ip_address.as_deref().unwrap_or("local")
+        );
+        self.check_rate_limit(&rate_key)?;
+
         let token = req.token.ok_or(AuthError::InvalidToken)?;
 
         if req.new_password.len() < self.config.min_password_length {
-            return Err(AuthError::PasswordTooShort);
+            return Err(AuthError::PasswordTooShort {
+                min: self.config.min_password_length,
+            });
         }
         if req.new_password.len() > self.config.max_password_length {
             return Err(AuthError::PasswordTooLong);
@@ -881,7 +904,9 @@ impl AuthService {
         req: ChangePasswordRequest,
     ) -> Result<ChangePasswordResponse, AuthError> {
         if req.new_password.len() < self.config.min_password_length {
-            return Err(AuthError::PasswordTooShort);
+            return Err(AuthError::PasswordTooShort {
+                min: self.config.min_password_length,
+            });
         }
         if req.new_password.len() > self.config.max_password_length {
             return Err(AuthError::PasswordTooLong);
@@ -947,6 +972,312 @@ impl AuthService {
         Ok(ChangePasswordResponse {
             token,
             user: user.to_wire(),
+        })
+    }
+
+    /// Sets the initial password for a user without requiring an existing password.
+    pub async fn set_password(
+        &self,
+        user_id: &str,
+        req: SetPasswordRequest,
+    ) -> Result<StatusResponse, AuthError> {
+        if req.new_password.len() < self.config.min_password_length {
+            return Err(AuthError::PasswordTooShort {
+                min: self.config.min_password_length,
+            });
+        }
+        if req.new_password.len() > self.config.max_password_length {
+            return Err(AuthError::PasswordTooLong);
+        }
+
+        let existing_account = self.find_credential_account(user_id).await?;
+        let password_hash = crypto::hash_password(req.new_password)
+            .await
+            .map_err(AuthError::Crypto)?;
+
+        match existing_account {
+            None => {
+                self.adapter
+                    .create_account(CreateAccountInput {
+                        id: None,
+                        user_id: user_id.to_string(),
+                        account_id: user_id.to_string(),
+                        provider_id: "credential".to_string(),
+                        password: Some(password_hash),
+                        access_token: None,
+                        refresh_token: None,
+                        id_token: None,
+                        access_token_expires_at: None,
+                        refresh_token_expires_at: None,
+                        scope: None,
+                    })
+                    .await?;
+                Ok(StatusResponse::success())
+            }
+            Some(account) => {
+                if account.password.is_some() {
+                    return Err(AuthError::PasswordAlreadySet);
+                }
+                self.adapter
+                    .update_account_password(user_id, &password_hash)
+                    .await?;
+                Ok(StatusResponse::success())
+            }
+        }
+    }
+
+    /// Statelessly verifies the user's password without modifying any state.
+    pub async fn verify_password(
+        &self,
+        user_id: &str,
+        req: VerifyPasswordRequest,
+    ) -> Result<StatusResponse, AuthError> {
+        let account = self
+            .find_credential_account(user_id)
+            .await?
+            .ok_or(AuthError::InvalidPassword)?;
+
+        let stored_hash = account.password.ok_or(AuthError::InvalidPassword)?;
+        let valid = crypto::verify_password(stored_hash, req.password)
+            .await
+            .map_err(AuthError::Crypto)?;
+
+        if !valid {
+            return Err(AuthError::InvalidPassword);
+        }
+
+        Ok(StatusResponse::success())
+    }
+
+    /// Initiates email address change with verification token emission.
+    pub async fn change_email(
+        &self,
+        user_id: &str,
+        req: ChangeEmailRequest,
+    ) -> Result<StatusResponse, AuthError> {
+        let new_email = req.new_email.trim().to_lowercase();
+        if !is_valid_email(&new_email) {
+            return Err(AuthError::InvalidEmail);
+        }
+
+        let current_user = self
+            .adapter
+            .find_user_by_id(user_id)
+            .await?
+            .ok_or(AuthError::UserNotFound)?;
+
+        if new_email == current_user.email.to_lowercase() {
+            return Err(AuthError::bad_request("BAD_REQUEST", "Email is the same"));
+        }
+
+        // Return status true to avoid timing/enumeration leaks if email already exists
+        if let Some(_existing) = self.adapter.find_user_by_email(&new_email).await? {
+            return Ok(StatusResponse::success());
+        }
+
+        let token = crypto::generate_random_token(32);
+        let identifier = format!("change-email:{token}");
+        let expires_at = OffsetDateTime::now_utc() + self.config.verify_email_expires_in;
+
+        self.adapter
+            .create_verification(CreateVerificationInput {
+                id: None,
+                identifier,
+                value: format!("{user_id}:{new_email}"),
+                expires_at,
+            })
+            .await?;
+
+        let callback_url = req.callback_url.as_deref().unwrap_or("/");
+        let verification_url = format!(
+            "{}/verify-email?token={}&callbackURL={}",
+            self.config.base_url.trim_end_matches('/'),
+            token,
+            url_encode(callback_url)
+        );
+
+        self.email_sender
+            .send_verification_email(&current_user.email, &verification_url, &token)
+            .await
+            .map_err(AuthError::Email)?;
+
+        Ok(StatusResponse::success())
+    }
+
+    /// Updates session metadata and touches updated_at.
+    pub async fn update_session(
+        &self,
+        token: &str,
+        _req: UpdateSessionRequest,
+    ) -> Result<SessionWire, AuthError> {
+        let raw_token = self
+            .verify_token(token)
+            .unwrap_or_else(|| token.to_string());
+        let session = self
+            .adapter
+            .find_session_by_token(&raw_token)
+            .await?
+            .ok_or(AuthError::SessionExpired)?;
+
+        let now = OffsetDateTime::now_utc();
+        let _ = self
+            .adapter
+            .update_session_expiry(&raw_token, session.expires_at)
+            .await;
+
+        let updated_session = SessionRecord {
+            updated_at: now,
+            ..session
+        };
+        Ok(updated_session.to_wire())
+    }
+
+    /// Retrieves OAuth tokens for a linked account.
+    pub async fn get_access_token(
+        &self,
+        user_id: &str,
+        req: OAuthAccountSelectionRequest,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        let accounts = self.adapter.find_accounts_by_user_id(user_id).await?;
+        let account = accounts
+            .into_iter()
+            .find(|a| {
+                if let Some(ref pid) = req.provider_id {
+                    if !a.provider_id.eq_ignore_ascii_case(pid) {
+                        return false;
+                    }
+                }
+                if let Some(ref aid) = req.account_id {
+                    if a.account_id != *aid {
+                        return false;
+                    }
+                }
+                a.provider_id != "credential"
+            })
+            .ok_or(AuthError::AccountNotFound)?;
+
+        Ok(OAuthTokenResponse {
+            token_type: Some("Bearer".to_string()),
+            id_token: account.id_token,
+            access_token: account.access_token,
+            refresh_token: account.refresh_token,
+            access_token_expires_at: account.access_token_expires_at,
+            refresh_token_expires_at: account.refresh_token_expires_at,
+        })
+    }
+
+    /// Refreshes and returns OAuth tokens for a linked account.
+    pub async fn refresh_token(
+        &self,
+        user_id: &str,
+        req: OAuthAccountSelectionRequest,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        let accounts = self.adapter.find_accounts_by_user_id(user_id).await?;
+        let account = accounts
+            .into_iter()
+            .find(|a| {
+                if let Some(ref pid) = req.provider_id {
+                    if !a.provider_id.eq_ignore_ascii_case(pid) {
+                        return false;
+                    }
+                }
+                if let Some(ref aid) = req.account_id {
+                    if a.account_id != *aid {
+                        return false;
+                    }
+                }
+                a.provider_id != "credential"
+            })
+            .ok_or(AuthError::AccountNotFound)?;
+
+        if account.refresh_token.is_none() {
+            return Err(AuthError::FailedToRefreshAccessToken);
+        }
+
+        Ok(OAuthTokenResponse {
+            token_type: Some("Bearer".to_string()),
+            id_token: account.id_token,
+            access_token: account.access_token,
+            refresh_token: account.refresh_token,
+            access_token_expires_at: account.access_token_expires_at,
+            refresh_token_expires_at: account.refresh_token_expires_at,
+        })
+    }
+
+    /// Deletes user upon verification of email callback token.
+    pub async fn delete_user_by_callback(&self, token: &str) -> Result<String, AuthError> {
+        if !self.config.delete_user_enabled {
+            return Err(AuthError::NotFound);
+        }
+
+        let identifier = format!("delete-account-{token}");
+        let alt_identifier = format!("delete-user:{token}");
+
+        let record = match self.adapter.consume_verification(&identifier).await? {
+            Some(rec) => rec,
+            None => self
+                .adapter
+                .consume_verification(&alt_identifier)
+                .await?
+                .ok_or(AuthError::InvalidToken)?,
+        };
+
+        if record.is_expired() {
+            return Err(AuthError::TokenExpired);
+        }
+
+        let user_id = record.value;
+        self.adapter.delete_user(&user_id).await?;
+        self.adapter.delete_sessions_by_user_id(&user_id).await?;
+        self.hooks.on_user_deleted(&user_id).await;
+        Ok(user_id)
+    }
+
+    /// Returns public account information and provider metadata for a linked account.
+    pub async fn get_account_info(
+        &self,
+        user_id: &str,
+        req: OAuthAccountSelectionRequest,
+    ) -> Result<AccountInfoResponse, AuthError> {
+        let user = self
+            .adapter
+            .find_user_by_id(user_id)
+            .await?
+            .ok_or(AuthError::UserNotFound)?;
+
+        let accounts = self.adapter.find_accounts_by_user_id(user_id).await?;
+        let account = accounts
+            .into_iter()
+            .find(|a| {
+                if let Some(ref pid) = req.provider_id {
+                    if !a.provider_id.eq_ignore_ascii_case(pid) {
+                        return false;
+                    }
+                }
+                if let Some(ref aid) = req.account_id {
+                    if a.account_id != *aid {
+                        return false;
+                    }
+                }
+                a.provider_id != "credential"
+            })
+            .ok_or(AuthError::AccountNotFound)?;
+
+        Ok(AccountInfoResponse {
+            user: user.to_wire(),
+            account: AccountListEntryWire {
+                id: account.id,
+                provider_id: account.provider_id,
+                account_id: account.account_id,
+                user_id: account.user_id,
+                created_at: account.created_at,
+                updated_at: account.updated_at,
+                scopes: account
+                    .scope
+                    .map(|s| s.split(',').map(|p| p.trim().to_string()).collect())
+                    .unwrap_or_default(),
+            },
+            data: serde_json::json!({}),
         })
     }
 

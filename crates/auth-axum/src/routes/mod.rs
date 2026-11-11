@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod error;
 pub mod ok;
 pub mod one_time_token;
 pub mod password;
@@ -23,8 +24,9 @@ where
     AuthState: FromRef<S>,
 {
     Router::new()
-        // Health
+        // Health & Error Display
         .route("/ok", get(ok::ok))
+        .route("/error", get(error::error_page))
         // Email Authentication
         .route("/sign-up/email", post(auth::sign_up_email))
         .route("/sign-in/email", post(auth::sign_in_email))
@@ -41,6 +43,7 @@ where
             "/revoke-other-sessions",
             post(session::revoke_other_sessions),
         )
+        .route("/update-session", post(session::update_session))
         // Password Management
         .route(
             "/request-password-reset",
@@ -52,9 +55,13 @@ where
         )
         .route("/reset-password", post(password::reset_password))
         .route("/change-password", post(password::change_password))
-        // User Profile & Account Deletion
+        .route("/set-password", post(password::set_password))
+        .route("/verify-password", post(password::verify_password))
+        // User Profile, Email Change & Account Deletion
         .route("/update-user", post(user::update_user))
+        .route("/change-email", post(user::change_email))
         .route("/delete-user", post(user::delete_user))
+        .route("/delete-user/callback", get(user::delete_user_callback))
         // Email Verification
         .route(
             "/send-verification-email",
@@ -67,6 +74,9 @@ where
         .route("/callback/{provider}", get(social::oauth_callback))
         .route("/list-accounts", get(social::list_accounts))
         .route("/unlink-account", post(social::unlink_account))
+        .route("/get-access-token", post(social::get_access_token))
+        .route("/refresh-token", post(social::refresh_token))
+        .route("/account-info", get(social::get_account_info))
 }
 
 /// Constructs an `auth_routes` sub-router merged with any registered `AxumAuthPlugin` routers.
@@ -76,14 +86,28 @@ pub fn auth_routes_with_plugins(state: &AuthState) -> Router<AuthState> {
     let mut plugins: Vec<std::sync::Arc<dyn crate::plugin::AxumAuthPlugin>> =
         (*state.axum_plugins).clone();
 
-    // Dynamically mount AdminPlugin router if registered on AuthService and not already in axum_plugins
+    // Dynamically mount any registered BetterAuthPlugin providing an Axum route provider
+    for plugin in state.service.plugins().plugins() {
+        if let Some(provider) = plugin.route_provider() {
+            let pid = provider.route_plugin_id();
+            if !plugins.iter().any(|p| p.plugin_id() == pid) {
+                if let Some(boxed_router) = provider.build_router_any(state) {
+                    if let Ok(r) = boxed_router.downcast::<Router<AuthState>>() {
+                        router = router.merge(*r);
+                    }
+                }
+            }
+        }
+    }
+
+    // Mount AdminPlugin router if registered on AuthService and not already mounted
     if let Some(admin_plugin) = state.service.get_plugin::<auth_core::AdminPlugin>() {
         if !plugins.iter().any(|p| p.plugin_id() == "admin") {
             plugins.push(std::sync::Arc::new(admin_plugin.clone()));
         }
     }
 
-    // Dynamically mount OneTimeTokenPlugin router if registered on AuthService and not already in axum_plugins
+    // Mount OneTimeTokenPlugin router if registered on AuthService and not already mounted
     if let Some(ott_plugin) = state.service.get_plugin::<auth_core::OneTimeTokenPlugin>() {
         if !plugins.iter().any(|p| p.plugin_id() == "one-time-token") {
             plugins.push(std::sync::Arc::new(ott_plugin.clone()));

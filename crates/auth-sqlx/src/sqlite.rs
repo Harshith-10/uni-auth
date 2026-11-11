@@ -13,7 +13,8 @@ use auth_core::adapter::{AuthAdapter, BoxFuture};
 use auth_core::error::AdapterError;
 use auth_core::models::{
     AccountRecord, AdminListUsersFilter, CreateAccountInput, CreateSessionInput, CreateUserInput,
-    CreateVerificationInput, SessionRecord, UpdateUserFields, UserRecord, VerificationRecord,
+    CreateVerificationInput, FieldUpdate, SessionRecord, UpdateUserFields, UserRecord,
+    VerificationRecord,
 };
 use auth_core::plugin::PluginMigration;
 
@@ -617,7 +618,9 @@ impl AuthAdapter for SqliteAuthAdapter {
                 account_input.account_id = id.clone();
             }
 
-            let acc_id = account_input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let acc_id = account_input
+                .id
+                .unwrap_or_else(|| Uuid::now_v7().to_string());
             let acc_res = sqlx::query(
                 r#"
                 INSERT INTO "account" (
@@ -730,71 +733,83 @@ impl AuthAdapter for SqliteAuthAdapter {
         let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
-            let current_row = sqlx::query(r#"SELECT * FROM "user" WHERE id = ?"#)
-                .bind(&id)
-                .fetch_optional(&pool)
-                .await
-                .map_err(|e| AdapterError::Query(e.to_string()))?
-                .ok_or(AdapterError::NotFound)?;
-
-            let current = map_user_row(current_row)?;
-            let new_name = fields.name.unwrap_or(current.name);
-            let new_email = fields
-                .email
-                .map(|e| e.to_lowercase())
-                .unwrap_or(current.email);
-            let new_verified = fields.email_verified.unwrap_or(current.email_verified);
-            let new_image = match fields.image {
-                Some(Some(img)) if !img.is_empty() => Some(img),
-                Some(_) => None,
-                None => current.image,
-            };
-            let new_role = fields.role.or(current.role);
-            let new_banned = fields.banned.unwrap_or(current.banned);
-            let new_ban_reason = fields.ban_reason.unwrap_or(current.ban_reason);
-            let new_ban_expires = fields.ban_expires.unwrap_or(current.ban_expires);
-
-            let verified_int: i64 = if new_verified { 1 } else { 0 };
-            let banned_int: i64 = if new_banned { 1 } else { 0 };
-            let ban_exp_str = format_opt_dt(new_ban_expires);
             let now = OffsetDateTime::now_utc();
             let now_str = format_dt(now);
 
-            let res = sqlx::query(
-                r#"
-                UPDATE "user"
-                SET name = ?, email = ?, email_verified = ?, image = ?,
-                    role = ?, banned = ?, ban_reason = ?, ban_expires = ?, updated_at = ?
-                WHERE id = ?
-                "#,
-            )
-            .bind(&new_name)
-            .bind(&new_email)
-            .bind(verified_int)
-            .bind(&new_image)
-            .bind(&new_role)
-            .bind(banned_int)
-            .bind(&new_ban_reason)
-            .bind(&ban_exp_str)
-            .bind(&now_str)
-            .bind(&id)
-            .execute(&pool)
-            .await;
+            let mut qb = QueryBuilder::<sqlx::Sqlite>::new(r#"UPDATE "user" SET "#);
+            let mut separated = qb.separated(", ");
 
+            if let Some(ref name) = fields.name {
+                separated.push("name = ");
+                separated.push_bind_unseparated(name);
+            }
+            if let Some(ref email) = fields.email {
+                separated.push("email = ");
+                separated.push_bind_unseparated(email.to_lowercase());
+            }
+            if let Some(verified) = fields.email_verified {
+                separated.push("email_verified = ");
+                separated.push_bind_unseparated(if verified { 1i64 } else { 0i64 });
+            }
+            match fields.image {
+                FieldUpdate::Set(ref img) if !img.is_empty() => {
+                    separated.push("image = ");
+                    separated.push_bind_unseparated(img);
+                }
+                FieldUpdate::Clear => {
+                    separated.push("image = NULL");
+                }
+                _ => {}
+            }
+            if let Some(ref role) = fields.role {
+                separated.push("role = ");
+                separated.push_bind_unseparated(role);
+            }
+            if let Some(banned) = fields.banned {
+                separated.push("banned = ");
+                separated.push_bind_unseparated(if banned { 1i64 } else { 0i64 });
+            }
+            match fields.ban_reason {
+                FieldUpdate::Set(ref reason) => {
+                    separated.push("ban_reason = ");
+                    separated.push_bind_unseparated(reason);
+                }
+                FieldUpdate::Clear => {
+                    separated.push("ban_reason = NULL");
+                }
+                FieldUpdate::Unchanged => {}
+            }
+            match fields.ban_expires {
+                FieldUpdate::Set(exp) => {
+                    separated.push("ban_expires = ");
+                    separated.push_bind_unseparated(format_dt(exp));
+                }
+                FieldUpdate::Clear => {
+                    separated.push("ban_expires = NULL");
+                }
+                FieldUpdate::Unchanged => {}
+            }
+
+            separated.push("updated_at = ");
+            separated.push_bind_unseparated(now_str);
+
+            qb.push(r#" WHERE id = "#);
+            qb.push_bind(&id);
+
+            let res = qb.build().execute(&pool).await;
             match res {
-                Ok(_) => Ok(UserRecord {
-                    id,
-                    name: new_name,
-                    email: new_email,
-                    email_verified: new_verified,
-                    image: new_image,
-                    created_at: current.created_at,
-                    updated_at: now,
-                    role: new_role,
-                    banned: new_banned,
-                    ban_reason: new_ban_reason,
-                    ban_expires: new_ban_expires,
-                }),
+                Ok(result) => {
+                    if result.rows_affected() == 0 {
+                        return Err(AdapterError::NotFound);
+                    }
+                    let updated_row = sqlx::query(r#"SELECT * FROM "user" WHERE id = ?"#)
+                        .bind(&id)
+                        .fetch_optional(&pool)
+                        .await
+                        .map_err(|e| AdapterError::Query(e.to_string()))?
+                        .ok_or(AdapterError::NotFound)?;
+                    map_user_row(updated_row)
+                }
                 Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
                     Err(AdapterError::UniqueViolation(e.message().to_string()))
                 }

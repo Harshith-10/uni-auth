@@ -55,7 +55,11 @@ impl BetterAuthPlugin for BearerPlugin {
         ctx: &'a mut EndpointHookContext,
         service: &'a AuthService,
     ) -> BoxFuture<'a, Result<(), AuthError>> {
-        let auth_header = ctx.request_headers.get("authorization").cloned();
+        let auth_header = ctx
+            .request_headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
         let require_signature = self.config.require_signature;
         let secret = service.config().secret.clone();
 
@@ -99,13 +103,17 @@ impl BetterAuthPlugin for BearerPlugin {
             // Inject into cookie header
             let cookie_name = "better-auth.session_token";
             let new_cookie = format!("{cookie_name}={decoded_token}");
-            if let Some(existing) = ctx.request_headers.get_mut("cookie") {
-                if !existing.contains(cookie_name) {
-                    existing.push_str("; ");
-                    existing.push_str(&new_cookie);
+            if let Some(existing) = ctx.request_headers.get(http::header::COOKIE) {
+                if let Ok(exist_str) = existing.to_str() {
+                    if !exist_str.contains(cookie_name) {
+                        let combined = format!("{exist_str}; {new_cookie}");
+                        if let Ok(val) = http::HeaderValue::from_str(&combined) {
+                            ctx.request_headers.insert(http::header::COOKIE, val);
+                        }
+                    }
                 }
-            } else {
-                ctx.request_headers.insert("cookie".to_string(), new_cookie);
+            } else if let Ok(val) = http::HeaderValue::from_str(&new_cookie) {
+                ctx.request_headers.insert(http::header::COOKIE, val);
             }
 
             Ok(())
@@ -122,20 +130,34 @@ impl BetterAuthPlugin for BearerPlugin {
         _service: &'a AuthService,
     ) -> BoxFuture<'a, Result<(), AuthError>> {
         // Look for session cookie in response headers
-        if let Some(set_cookie) = ctx.response_headers.get("set-cookie").cloned() {
-            if let Some(token) = extract_session_token_from_set_cookie(&set_cookie) {
-                ctx.response_headers
-                    .insert("set-auth-token".to_string(), token);
+        let set_cookie = ctx
+            .response_headers
+            .get(http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
 
-                let expose = ctx
+        if let Some(set_cookie) = set_cookie {
+            if let Some(token) = extract_session_token_from_set_cookie(&set_cookie) {
+                if let Ok(val) = http::HeaderValue::from_str(&token) {
+                    ctx.response_headers.insert("set-auth-token", val);
+                }
+
+                let expose_key = http::header::ACCESS_CONTROL_EXPOSE_HEADERS;
+                let current_expose = ctx
                     .response_headers
-                    .entry("access-control-expose-headers".to_string())
-                    .or_default();
-                if !expose.contains("set-auth-token") {
-                    if !expose.is_empty() {
-                        expose.push_str(", ");
+                    .get(&expose_key)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default();
+
+                if !current_expose.contains("set-auth-token") {
+                    let new_expose = if current_expose.is_empty() {
+                        "set-auth-token".to_string()
+                    } else {
+                        format!("{current_expose}, set-auth-token")
+                    };
+                    if let Ok(val) = http::HeaderValue::from_str(&new_expose) {
+                        ctx.response_headers.insert(expose_key, val);
                     }
-                    expose.push_str("set-auth-token");
                 }
             }
         }

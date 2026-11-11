@@ -6,7 +6,9 @@ use axum::response::{IntoResponse, Response};
 use crate::error_to_response;
 use crate::extract::{CurrentSession, ExtractedToken, extract_token_with_source};
 use crate::state::AuthState;
-use auth_proto::{AuthErrorResponse, RevokeSessionRequest, error_codes};
+use auth_proto::{
+    AuthErrorResponse, RevokeSessionRequest, UpdateSessionRequest, error_codes,
+};
 
 pub async fn get_session(
     State(state): State<AuthState>,
@@ -114,6 +116,26 @@ pub async fn revoke_other_sessions(
         .await
     {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),
+        Err(err) => error_to_response(err),
+    }
+}
+
+/// `POST /api/auth/update-session` (updates active session metadata)
+pub async fn update_session(
+    State(state): State<AuthState>,
+    current_session: CurrentSession,
+    Json(payload): Json<UpdateSessionRequest>,
+) -> Response {
+    match state
+        .service
+        .update_session(&current_session.session.token, payload)
+        .await
+    {
+        Ok(session) => (
+            StatusCode::OK,
+            Json(auth_proto::UpdateSessionResponse { session }),
+        )
+            .into_response(),
         Err(err) => error_to_response(err),
     }
 }

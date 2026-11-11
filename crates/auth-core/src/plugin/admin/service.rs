@@ -17,7 +17,7 @@ use crate::crypto;
 use crate::error::{AdapterError, AuthError};
 use crate::models::{
     AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput, CreateSessionInput,
-    CreateUserInput, RequestMeta,
+    CreateUserInput, FieldUpdate, RequestMeta,
 };
 use crate::plugin::admin::AdminPlugin;
 use crate::service::AuthService;
@@ -262,14 +262,20 @@ impl<'a> AdminService<'a> {
             .unwrap_or_else(|| self.plugin.config.default_role.clone());
 
         let banned = data_map.get("banned").and_then(|v| v.as_bool());
-        let ban_reason = data_map
-            .get("banReason")
-            .map(|v| v.as_str().map(String::from));
-        let ban_expires = data_map.get("banExpires").and_then(|v| {
-            v.as_str()
-                .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-                .map(Some)
-        });
+        let ban_reason: FieldUpdate<String> = match data_map.get("banReason") {
+            Some(v) => match v.as_str() {
+                Some(s) if !s.is_empty() => FieldUpdate::Set(s.to_string()),
+                _ => FieldUpdate::Clear,
+            },
+            None => FieldUpdate::Unchanged,
+        };
+        let ban_expires: FieldUpdate<OffsetDateTime> = match data_map.get("banExpires") {
+            Some(v) => match v.as_str().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok()) {
+                Some(dt) => FieldUpdate::Set(dt),
+                None => FieldUpdate::Clear,
+            },
+            None => FieldUpdate::Unchanged,
+        };
 
         let updated = self
             .service
@@ -385,14 +391,17 @@ impl<'a> AdminService<'a> {
                 fields.banned = Some(b);
             }
             if let Some(reason_val) = req.data.get("banReason") {
-                fields.ban_reason = Some(reason_val.as_str().map(String::from));
+                fields.ban_reason = match reason_val.as_str() {
+                    Some(s) => FieldUpdate::Set(s.to_string()),
+                    None => FieldUpdate::Clear,
+                };
             }
             if let Some(exp_val) = req.data.get("banExpires") {
                 if exp_val.is_null() {
-                    fields.ban_expires = Some(None);
+                    fields.ban_expires = FieldUpdate::Clear;
                 } else if let Some(s) = exp_val.as_str() {
                     if let Ok(dt) = OffsetDateTime::parse(s, &Rfc3339) {
-                        fields.ban_expires = Some(Some(dt));
+                        fields.ban_expires = FieldUpdate::Set(dt);
                     }
                 }
             }
@@ -445,7 +454,10 @@ impl<'a> AdminService<'a> {
             fields.name = Some(name.to_string());
         }
         if let Some(img_val) = req.data.get("image") {
-            fields.image = Some(img_val.as_str().filter(|s| !s.is_empty()).map(String::from));
+            fields.image = match img_val.as_str().filter(|s| !s.is_empty()) {
+                Some(s) => FieldUpdate::Set(s.to_string()),
+                None => FieldUpdate::Clear,
+            };
         }
 
         let updated = self
@@ -578,8 +590,11 @@ impl<'a> AdminService<'a> {
                 &req.user_id,
                 AdminUpdateUserFields {
                     banned: Some(true),
-                    ban_reason: Some(Some(reason)),
-                    ban_expires: Some(expires),
+                    ban_reason: FieldUpdate::Set(reason),
+                    ban_expires: match expires {
+                        Some(exp) => FieldUpdate::Set(exp),
+                        None => FieldUpdate::Clear,
+                    },
                     ..Default::default()
                 },
             )
@@ -616,8 +631,8 @@ impl<'a> AdminService<'a> {
                 target_user_id,
                 AdminUpdateUserFields {
                     banned: Some(false),
-                    ban_reason: Some(None),
-                    ban_expires: Some(None),
+                    ban_reason: FieldUpdate::Clear,
+                    ban_expires: FieldUpdate::Clear,
                     ..Default::default()
                 },
             )
@@ -846,7 +861,9 @@ impl<'a> AdminService<'a> {
         )?;
 
         if req.new_password.len() < self.service.config().min_password_length {
-            return Err(AuthError::PasswordTooShort);
+            return Err(AuthError::PasswordTooShort {
+                min: self.service.config().min_password_length,
+            });
         }
         if req.new_password.len() > self.service.config().max_password_length {
             return Err(AuthError::PasswordTooLong);

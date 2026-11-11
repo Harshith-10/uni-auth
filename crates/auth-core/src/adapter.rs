@@ -156,7 +156,7 @@ pub trait AuthAdapter: Send + Sync {
             id,
             UpdateUserFields {
                 name,
-                image,
+                image: image.into(),
                 ..Default::default()
             },
         )
@@ -381,7 +381,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 )));
             }
 
-            let account_id = account_input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let account_id = account_input
+                .id
+                .unwrap_or_else(|| Uuid::now_v7().to_string());
             let account = AccountRecord {
                 id: account_id,
                 user_id: account_input.user_id,
@@ -483,24 +485,15 @@ impl AuthAdapter for InMemoryAuthAdapter {
             if let Some(verified) = fields.email_verified {
                 user.email_verified = verified;
             }
-            if let Some(img_opt) = fields.image {
-                user.image = match img_opt {
-                    Some(img) if !img.is_empty() => Some(img),
-                    _ => None,
-                };
-            }
+            fields.image.apply_to(&mut user.image);
             if let Some(role) = fields.role {
                 user.role = Some(role);
             }
             if let Some(banned) = fields.banned {
                 user.banned = banned;
             }
-            if let Some(reason_opt) = fields.ban_reason {
-                user.ban_reason = reason_opt;
-            }
-            if let Some(exp_opt) = fields.ban_expires {
-                user.ban_expires = exp_opt;
-            }
+            fields.ban_reason.apply_to(&mut user.ban_reason);
+            fields.ban_expires.apply_to(&mut user.ban_expires);
             user.updated_at = OffsetDateTime::now_utc();
             Ok(user.clone())
         })

@@ -5,7 +5,8 @@ use auth_core::models::{SessionRecord, UserRecord};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use auth_core::{OAuthHttpClient, OAuthProviderConfig, ReqwestOAuthClient};
+pub use auth_core::{OAuthHttpClient, OAuthProviderConfig};
+pub use crate::oauth::ReqwestOAuthClient;
 
 /// Response extension carrying a newly issued session for `after_endpoint` plugin hooks.
 #[derive(Clone, Debug)]
@@ -21,6 +22,7 @@ pub struct AuthState {
     pub oauth_providers: Arc<HashMap<String, OAuthProviderConfig>>,
     pub oauth_http_client: Arc<dyn OAuthHttpClient>,
     pub trusted_origins: Arc<Vec<String>>,
+    pub trusted_proxies: Arc<Vec<crate::extract::IpCidr>>,
     pub axum_plugins: Arc<Vec<Arc<dyn crate::plugin::AxumAuthPlugin>>>,
 }
 
@@ -34,6 +36,7 @@ impl AuthState {
             oauth_providers: Arc::new(HashMap::new()),
             oauth_http_client: Arc::new(ReqwestOAuthClient::new()),
             trusted_origins: Arc::new(Vec::new()),
+            trusted_proxies: Arc::new(Vec::new()),
             axum_plugins: Arc::new(Vec::new()),
         }
     }
@@ -73,6 +76,21 @@ impl AuthState {
     {
         self.trusted_origins = Arc::new(origins.into_iter().map(Into::into).collect());
         self
+    }
+
+    /// Configures trusted proxy CIDRs for extracting client IP from forwarded headers.
+    pub fn with_trusted_proxies<I, S>(mut self, proxies: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut list = Vec::new();
+        for p in proxies {
+            let cidr = p.as_ref().parse::<crate::extract::IpCidr>()?;
+            list.push(cidr);
+        }
+        self.trusted_proxies = Arc::new(list);
+        Ok(self)
     }
 
     /// Attaches the signed session cookie (and `set-auth-token` header) to an outgoing Response.

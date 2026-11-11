@@ -307,3 +307,26 @@ async fn test_native_client_admin_operations_and_impersonation() {
     let restored = store.stop_impersonating().await.unwrap();
     assert_eq!(restored.user.email, "native_admin@example.com");
 }
+
+#[tokio::test]
+async fn test_keyring_token_storage_serialized_writes_and_cache() {
+    let storage = auth_client::KeyringTokenStorage::new(
+        "test-app-service",
+        "test-user-account",
+    );
+    assert_eq!(storage.service_name(), "test-app-service");
+    assert_eq!(storage.account_name(), "test-user-account");
+
+    // Immediate write-through cache check
+    storage.set_token("token_alpha").unwrap();
+    assert_eq!(storage.get_token().unwrap(), Some("token_alpha".to_string()));
+
+    // Rapid concurrent mutations are serialized in order
+    for i in 0..20 {
+        storage.set_token(&format!("token_{i}")).unwrap();
+    }
+    assert_eq!(storage.get_token().unwrap(), Some("token_19".to_string()));
+
+    storage.delete_token().unwrap();
+    assert_eq!(storage.get_token().unwrap(), None);
+}

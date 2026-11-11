@@ -168,18 +168,26 @@ impl BetterAuthPlugin for OneTimeTokenPlugin {
         Box::pin(async move {
             let res = plugin.generate_token(&session_token, &*adapter).await?;
 
-            ctx.response_headers
-                .insert("set-ott".to_string(), res.token);
+            if let Ok(val) = http::HeaderValue::from_str(&res.token) {
+                ctx.response_headers.insert("set-ott", val);
+            }
 
-            let expose = ctx
+            let expose_key = http::header::ACCESS_CONTROL_EXPOSE_HEADERS;
+            let current_expose = ctx
                 .response_headers
-                .entry("access-control-expose-headers".to_string())
-                .or_default();
-            if !expose.contains("set-ott") {
-                if !expose.is_empty() {
-                    expose.push_str(", ");
+                .get(&expose_key)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+
+            if !current_expose.contains("set-ott") {
+                let new_expose = if current_expose.is_empty() {
+                    "set-ott".to_string()
+                } else {
+                    format!("{current_expose}, set-ott")
+                };
+                if let Ok(val) = http::HeaderValue::from_str(&new_expose) {
+                    ctx.response_headers.insert(expose_key, val);
                 }
-                expose.push_str("set-ott");
             }
 
             Ok(())

@@ -28,14 +28,14 @@ pub use error::{AdapterError, AuthError};
 pub use hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter, spawn_expired_cleanup_worker};
 pub use models::*;
 pub use oauth::{
-    OAuthHttpClient, OAuthProfileResult, OAuthProviderConfig, OAuthStateData, ReqwestOAuthClient,
+    OAuthHttpClient, OAuthProfileResult, OAuthProviderConfig, OAuthStateData,
 };
 #[allow(deprecated)]
 pub use plugin::AuthPlugin;
 pub use plugin::{
     AdminPlugin, AdminService, AdminServiceExt, BearerConfig, BearerPlugin, BetterAuthPlugin,
-    DatabaseHooks, EndpointHookContext, HookOutcome, HookedAdapter, OneTimeTokenConfig,
+    DatabaseHooks, EndpointHookContext, HookFuture, HookOutcome, HookedAdapter, OneTimeTokenConfig,
     OneTimeTokenPlugin, OneTimeTokenServiceExt, OttStoreTokenMode, PluginMigration,
-    PluginRateLimitRule, PluginRegistry, TotpValidator, UserUpdatePatch,
+    PluginRateLimitRule, PluginRegistry, PluginRouteProvider, TotpValidator, UserUpdatePatch,
 };
 pub use service::{AuthConfig, AuthService, OAuthCallbackResult};

@@ -261,3 +261,50 @@ pub struct AdminPermissionResponse {
     pub error: Option<String>,
     pub success: bool,
 }
+
+// ──────────────────────────────────────────────
+// Secondary Feature Parity Responses
+// ──────────────────────────────────────────────
+
+/// Response returned by `POST /get-access-token` and `POST /refresh-token`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthTokenResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", with = "time::serde::rfc3339::option")]
+    pub access_token_expires_at: Option<time::OffsetDateTime>,
+    #[serde(skip_serializing_if = "Option::is_none", with = "time::serde::rfc3339::option")]
+    pub refresh_token_expires_at: Option<time::OffsetDateTime>,
+}
+
+/// Response returned by `GET /account-info`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInfoResponse {
+    pub user: UserWire,
+    pub account: AccountListEntryWire,
+    pub data: serde_json::Value,
+}
+
+/// Response returned by `POST /update-session`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSessionResponse {
+    pub session: SessionWire,
+}
+
+/// Upstream error query payload or error landing page JSON model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorResponseWire {
+    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_description: Option<String>,
+}

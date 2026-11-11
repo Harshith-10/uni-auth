@@ -10,9 +10,9 @@ use time::OffsetDateTime;
 use crate::access::AdminConfig;
 use crate::adapter::{AuthAdapter, BoxFuture};
 use crate::error::AuthError;
-use crate::models::{AdminUpdateUserFields, CreateSessionInput, CreateUserInput};
+use crate::models::{AdminUpdateUserFields, CreateSessionInput, CreateUserInput, FieldUpdate};
 use crate::plugin::{
-    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookOutcome, PluginMigration,
+    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookFuture, HookOutcome, PluginMigration,
 };
 use crate::service::AuthService;
 
@@ -43,25 +43,25 @@ impl DatabaseHooks for AdminPlugin {
         &'a self,
         mut input: CreateUserInput,
         _adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<HookOutcome<CreateUserInput>, AuthError>> {
+    ) -> HookFuture<'a, HookOutcome<CreateUserInput>> {
         let default_role = self.config.default_role.clone();
-        Box::pin(async move {
+        HookFuture::boxed(Box::pin(async move {
             if input.role.is_none() {
                 input.role = Some(default_role);
             }
             Ok(HookOutcome::Modified(input))
-        })
+        }))
     }
 
     fn before_create_session<'a>(
         &'a self,
         input: CreateSessionInput,
         adapter: &'a dyn AuthAdapter,
-    ) -> BoxFuture<'a, Result<HookOutcome<CreateSessionInput>, AuthError>> {
+    ) -> HookFuture<'a, HookOutcome<CreateSessionInput>> {
         let user_id = input.user_id.clone();
         let banned_msg = self.config.banned_user_message.clone();
 
-        Box::pin(async move {
+        HookFuture::boxed(Box::pin(async move {
             if let Some(user) = adapter.find_user_by_id(&user_id).await? {
                 if user.banned {
                     if let Some(exp) = user.ban_expires {
@@ -72,8 +72,8 @@ impl DatabaseHooks for AdminPlugin {
                                     &user.id,
                                     AdminUpdateUserFields {
                                         banned: Some(false),
-                                        ban_reason: Some(None),
-                                        ban_expires: Some(None),
+                                        ban_reason: FieldUpdate::Clear,
+                                        ban_expires: FieldUpdate::Clear,
                                         ..Default::default()
                                     },
                                 )
@@ -85,7 +85,7 @@ impl DatabaseHooks for AdminPlugin {
                 }
             }
             Ok(HookOutcome::Continue(input))
-        })
+        }))
     }
 }
 

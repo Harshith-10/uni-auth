@@ -66,8 +66,10 @@ impl BetterAuthPlugin for HeaderHookPlugin {
         _service: &'a AuthService,
     ) -> BoxFuture<'a, Result<(), AuthError>> {
         // Inject a request header before handler runs
-        ctx.request_headers
-            .insert("x-custom-req-tag".to_string(), "tagged-123".to_string());
+        ctx.request_headers.insert(
+            axum::http::header::HeaderName::from_static("x-custom-req-tag"),
+            axum::http::HeaderValue::from_static("tagged-123"),
+        );
         Box::pin(async { Ok(()) })
     }
 
@@ -81,8 +83,10 @@ impl BetterAuthPlugin for HeaderHookPlugin {
         _service: &'a AuthService,
     ) -> BoxFuture<'a, Result<(), AuthError>> {
         // Inject a custom response header
-        ctx.response_headers
-            .insert("x-plugin-processed".to_string(), "true".to_string());
+        ctx.response_headers.insert(
+            axum::http::header::HeaderName::from_static("x-plugin-processed"),
+            axum::http::HeaderValue::from_static("true"),
+        );
         Box::pin(async { Ok(()) })
     }
 }

@@ -9,7 +9,9 @@ use auth_core::AuthAdapter;
 use auth_core::access::{AdminConfig, Connector, RolePermissions};
 use auth_core::adapter::InMemoryAuthAdapter;
 use auth_core::error::AuthError;
-use auth_core::models::{AdminUpdateUserFields, CreateSessionInput, CreateUserInput, RequestMeta};
+use auth_core::models::{
+    AdminUpdateUserFields, CreateSessionInput, CreateUserInput, FieldUpdate, RequestMeta,
+};
 use auth_core::plugin::admin::{AdminPlugin, AdminServiceExt};
 use auth_core::plugin::{BetterAuthPlugin, EndpointHookContext};
 use auth_core::service::{AuthConfig, AuthService};
@@ -222,8 +224,8 @@ async fn test_database_hook_auto_unban_on_expired_ban() {
             &user.id,
             AdminUpdateUserFields {
                 banned: Some(true),
-                ban_reason: Some(Some("Temporary suspension".to_string())),
-                ban_expires: Some(Some(past_exp)),
+                ban_reason: FieldUpdate::Set("Temporary suspension".to_string()),
+                ban_expires: FieldUpdate::Set(past_exp),
                 ..Default::default()
             },
         )

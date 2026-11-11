@@ -4,7 +4,7 @@ use time::{Duration, OffsetDateTime};
 use auth_core::adapter::AuthAdapter;
 use auth_core::models::{
     AdminListUsersFilter, AdminUpdateUserFields, CreateAccountInput, CreateSessionInput,
-    CreateUserInput, CreateVerificationInput, UpdateUserFields,
+    CreateUserInput, CreateVerificationInput, FieldUpdate, UpdateUserFields,
 };
 use auth_core::plugin::PluginMigration;
 use auth_core::{AuthConfig, AuthService};
@@ -71,7 +71,7 @@ async fn test_sqlite_adapter_direct_crud() {
             AdminUpdateUserFields {
                 role: Some("admin".to_string()),
                 banned: Some(true),
-                ban_reason: Some(Some("Testing ban".to_string())),
+                ban_reason: FieldUpdate::Set("Testing ban".to_string()),
                 ..Default::default()
             },
         )
@@ -391,7 +391,7 @@ async fn test_sqlite_list_users_parameterized_query_builder() {
             AdminUpdateUserFields {
                 role: Some("admin".to_string()),
                 banned: Some(true),
-                ban_reason: Some(Some("Spamming".to_string())),
+                ban_reason: FieldUpdate::Set("Spamming".to_string()),
                 ..Default::default()
             },
         )
@@ -546,12 +546,12 @@ async fn test_sqlite_unified_update_user() {
     let patch = UpdateUserFields {
         name: Some("Sqlite Mutated".to_string()),
         email: None,
-        image: Some(Some("https://cdn.example.com/pic.png".to_string())),
+        image: FieldUpdate::Set("https://cdn.example.com/pic.png".to_string()),
         email_verified: Some(true),
         role: Some("admin".to_string()),
         banned: Some(true),
-        ban_reason: Some(Some("Terms violation".to_string())),
-        ban_expires: None,
+        ban_reason: FieldUpdate::Set("Terms violation".to_string()),
+        ban_expires: FieldUpdate::Unchanged,
     };
 
     let updated = adapter.update_user(&user.id, patch).await.unwrap();
