@@ -13,7 +13,7 @@ use auth_proto::{
     AdminSetUserPasswordRequest, AdminUpdateUserRequest, AdminUserIdRequest, AuthErrorResponse,
 };
 use crate::cookies::{build_clear_session_cookie, build_session_cookie};
-use crate::extract::{extract_request_meta, CurrentSession, OptionalSession};
+use crate::extract::{extract_request_meta, CurrentSession};
 use crate::state::AuthState;
 
 fn error_to_response(err: auth_core::AuthError) -> Response {
@@ -365,15 +365,14 @@ pub async fn set_user_password(
 /// `POST /api/auth/admin/has-permission`
 pub async fn user_has_permission(
     State(state): State<AuthState>,
-    OptionalSession(opt_session): OptionalSession,
+    current_session: CurrentSession,
     Json(payload): Json<AdminHasPermissionRequest>,
 ) -> Response {
-    if opt_session.is_none() && payload.user_id.is_none() && payload.role.is_none() {
-        let err = AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
-        return (StatusCode::UNAUTHORIZED, Json(err)).into_response();
-    }
-    let actor = opt_session.as_ref().map(|s| &s.user);
-    match state.service.admin_has_permission(actor, payload).await {
+    match state
+        .service
+        .admin_has_permission(Some(&current_session.user), payload)
+        .await
+    {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),
         Err(err) => error_to_response(err),
     }

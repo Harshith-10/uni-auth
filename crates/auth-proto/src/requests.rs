@@ -5,7 +5,17 @@
 //! with uppercase `URL`, so explicit `#[serde(rename = ...)]` attributes are used.
 
 use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Custom deserializer distinguishing omitted field (`None`) from explicit JSON `null` (`Some(None)`)
+/// and a present string (`Some(Some(String))`).
+pub fn deserialize_optional_nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
 
 // ──────────────────────────────────────────────
 // Email / Password Authentication
@@ -290,16 +300,25 @@ pub struct UnlinkAccountRequest {
 /// `POST /api/auth/update-user`
 ///
 /// Reference: `.reference/better-auth/.../update-user.ts` lines 31-95
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateUserRequest {
     /// Updated display name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    /// Updated profile image URL (`Some(None)` or `None` clears or leaves unchanged)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
+    /// Updated profile image URL (`Some(None)` clears avatar, `None` leaves unchanged)
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub image: Option<Option<String>>,
+
+    /// Captured so `AuthService::update_user` can reject `email` with `EMAIL_CAN_NOT_BE_UPDATED`
+    /// and reject completely empty update payloads.
+    #[serde(flatten, default)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// `POST /api/auth/delete-user`

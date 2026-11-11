@@ -283,3 +283,33 @@ fn test_auth_error_envelope() {
     );
     assert_eq!(err.status, Some(401));
 }
+
+#[test]
+fn test_update_user_and_delete_user_wire_format() {
+    // 1. Omitted image -> None
+    let omitted_json = json!({ "name": "Alice" });
+    let req1: UpdateUserRequest = serde_json::from_value(omitted_json).unwrap();
+    assert_eq!(req1.name.as_deref(), Some("Alice"));
+    assert_eq!(req1.image, None);
+
+    // 2. Explicit null image -> Some(None)
+    let null_json = json!({ "name": "Alice", "image": null });
+    let req2: UpdateUserRequest = serde_json::from_value(null_json).unwrap();
+    assert_eq!(req2.image, Some(None));
+
+    // 3. String image -> Some(Some(url))
+    let str_json = json!({ "image": "https://example.com/avatar.png" });
+    let req3: UpdateUserRequest = serde_json::from_value(str_json).unwrap();
+    assert_eq!(req3.image, Some(Some("https://example.com/avatar.png".to_string())));
+
+    // 4. Captures unknown field (like email)
+    let extra_json = json!({ "email": "new@example.com" });
+    let req4: UpdateUserRequest = serde_json::from_value(extra_json).unwrap();
+    assert!(req4.extra.contains_key("email"));
+
+    // 5. DeleteUserResponse
+    let del_json = json!({ "success": true, "message": "User deleted" });
+    let del_res: DeleteUserResponse = serde_json::from_value(del_json).unwrap();
+    assert!(del_res.success);
+    assert_eq!(del_res.message, "User deleted");
+}

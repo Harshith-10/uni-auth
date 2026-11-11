@@ -253,6 +253,8 @@ async fn test_auth_service_with_sqlite_backend() {
         require_email_verification: false,
         min_password_length: 8,
         max_password_length: 128,
+        delete_user_enabled: true,
+        defer_session_refresh: false,
     };
 
     let service = AuthService::new(config, adapter);
@@ -307,4 +309,32 @@ async fn test_auth_service_with_sqlite_backend() {
 
     // Re-verification fails (burned)
     assert!(service.verify_one_time_token(&ott_res.token).await.is_err());
+
+    // 5. Update user profile and clear image with null
+    let updated = service
+        .update_user(
+            &signup_res.user.id,
+            auth_proto::UpdateUserRequest {
+                name: Some("SQLite Updated".to_string()),
+                image: Some(Some("https://example.com/pic.png".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("Profile update with image should succeed");
+    assert_eq!(updated.user.as_ref().unwrap().name, "SQLite Updated");
+    assert_eq!(updated.user.as_ref().unwrap().image.as_deref(), Some("https://example.com/pic.png"));
+
+    let cleared = service
+        .update_user(
+            &signup_res.user.id,
+            auth_proto::UpdateUserRequest {
+                name: None,
+                image: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("Profile update with null image should succeed");
+    assert_eq!(cleared.user.as_ref().unwrap().image, None);
 }

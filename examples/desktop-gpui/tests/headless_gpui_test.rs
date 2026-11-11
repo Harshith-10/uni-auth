@@ -24,6 +24,8 @@ async fn start_test_server() -> (String, String, Arc<AuthService>) {
         require_email_verification: false,
         min_password_length: 8,
         max_password_length: 128,
+        delete_user_enabled: true,
+        defer_session_refresh: false,
     };
 
     let service = Arc::new(AuthService::new(config, adapter));

@@ -288,10 +288,17 @@ pub fn derive_signing_key(secret: &[u8], info: &[u8]) -> [u8; 32] {
     okm
 }
 
-/// Signs a token string using HMAC-SHA256 with a key derived from `secret`.
+/// Signs a token string using raw-secret HMAC-SHA256 with standard padded Base64 (`=`),
+/// matching Better Auth and `better-call`'s `serializeSignedCookie` / `makeSignature`.
 ///
-/// Output format: `<token>.<base64url_signature>`
+/// Output format: `<token>.<base64_signature>`
 pub fn sign_token(secret: &[u8], token: &str) -> String {
+    sign_cookie_better_call(secret, token)
+}
+
+/// Signs a token string using HKDF-derived key and base64urlnopad.
+/// Retained for backward-compatibility testing with legacy uni-auth tokens.
+pub fn sign_token_hkdf(secret: &[u8], token: &str) -> String {
     let key = derive_signing_key(secret, b"better-auth-token-signing");
     let mut mac = HmacSha256::new_from_slice(&key).expect("HMAC can take key of any size");
     mac.update(token.as_bytes());
@@ -541,6 +548,13 @@ mod tests {
             .replace('=', "%3D");
         assert_eq!(
             extract_and_verify_signed_token(secret, &url_encoded_cookie).as_deref(),
+            Some(token.as_str())
+        );
+
+        // 4. Legacy HKDF-derived signature backward compatibility
+        let legacy_hkdf = sign_token_hkdf(secret, &token);
+        assert_eq!(
+            extract_and_verify_signed_token(secret, &legacy_hkdf).as_deref(),
             Some(token.as_str())
         );
     }

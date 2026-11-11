@@ -241,6 +241,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         require_email_verification: false,
         min_password_length: 8,
         max_password_length: 128,
+        delete_user_enabled: true,
+        defer_session_refresh: false,
     };
 
     let service = Arc::new(AuthService::new(config, adapter));

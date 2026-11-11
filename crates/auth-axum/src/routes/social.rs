@@ -13,7 +13,7 @@ use auth_proto::{
     UnlinkAccountRequest,
 };
 use crate::cookies::build_session_cookie;
-use crate::extract::{extract_request_meta, CurrentSession};
+use crate::extract::{extract_request_meta, CurrentSession, FreshSession};
 use crate::state::{AuthState, OAuthProviderConfig};
 
 fn error_to_response(err: auth_core::AuthError) -> Response {
@@ -788,13 +788,13 @@ pub async fn list_accounts(
 
 pub async fn unlink_account(
     State(state): State<AuthState>,
-    current_session: CurrentSession,
+    fresh_session: FreshSession,
     Json(payload): Json<UnlinkAccountRequest>,
 ) -> Response {
     let account_id = payload.account_id.as_deref().unwrap_or("");
     match state
         .service
-        .unlink_account(&current_session.user.id, &payload.provider_id, account_id)
+        .unlink_account(&fresh_session.user.id, &payload.provider_id, account_id)
         .await
     {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),

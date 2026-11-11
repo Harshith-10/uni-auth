@@ -9,7 +9,7 @@ use auth_proto::{
     AdminHasPermissionRequest, AdminListUserSessionsResponse, AdminListUsersQuery,
     AdminListUsersResponse, AdminPermissionResponse, AdminSetRoleRequest,
     AdminSetUserPasswordRequest, AdminSuccessResponse, AdminUpdateUserRequest, AdminUserResponse,
-    ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest,
+    ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest, DeleteUserResponse,
     OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest, RoleValue,
     SendVerificationEmailRequest, SessionAndUserResponse, SessionWire, SignInEmailRequest,
     SignInResponse, SignOutRequest, SignOutResponse, SignUpEmailRequest, SignUpResponse,
@@ -62,6 +62,12 @@ pub struct AuthConfig {
 
     /// Maximum password length. Default: 128.
     pub max_password_length: usize,
+
+    /// Whether user self-deletion is enabled. Default: true.
+    pub delete_user_enabled: bool,
+
+    /// Whether deferred session refresh is required for POST /get-session. Default: false.
+    pub defer_session_refresh: bool,
 }
 
 impl Default for AuthConfig {
@@ -77,6 +83,8 @@ impl Default for AuthConfig {
             require_email_verification: false,
             min_password_length: 8,
             max_password_length: 128,
+            delete_user_enabled: true,
+            defer_session_refresh: false,
         }
     }
 }
@@ -167,6 +175,18 @@ impl AuthService {
         self
     }
 
+    /// Configures whether user self-deletion (`POST /delete-user`) is enabled.
+    pub fn with_delete_user_enabled(mut self, enabled: bool) -> Self {
+        self.config.delete_user_enabled = enabled;
+        self
+    }
+
+    /// Configures whether deferred session refresh is required for `POST /get-session`.
+    pub fn with_defer_session_refresh(mut self, enabled: bool) -> Self {
+        self.config.defer_session_refresh = enabled;
+        self
+    }
+
     pub fn auto_sign_in_after_verification(&self) -> bool {
         self.auto_sign_in_after_verification
     }
@@ -202,6 +222,11 @@ impl AuthService {
     /// Signs a raw token for cookie or `set-auth-token` header emission.
     pub fn sign_token(&self, raw_token: &str) -> String {
         crypto::sign_token(&self.config.secret, raw_token)
+    }
+
+    /// Signs a raw token using raw-secret HMAC-SHA256 with standard padded Base64 (`=`).
+    pub fn sign_cookie_token(&self, raw_token: &str) -> String {
+        crypto::sign_cookie_better_call(&self.config.secret, raw_token)
     }
 
     /// Strictly verifies a signed `<token>.<signature>` token (required for cookies).
@@ -411,7 +436,7 @@ impl AuthService {
         }
 
         if self.config.auto_sign_in {
-            let session = self.issue_session_for_user(&user, meta, false).await?;
+            let session = self.issue_session_for_user(&user, meta, true).await?;
 
             Ok(SignUpResponse {
                 token: Some(session.token),
@@ -856,6 +881,20 @@ impl AuthService {
         user_id: &str,
         req: UpdateUserRequest,
     ) -> Result<UpdateUserResponse, AuthError> {
+        if req.extra.contains_key("email") {
+            return Err(AuthError::bad_request(
+                error_codes::EMAIL_CAN_NOT_BE_UPDATED,
+                "Email can not be updated",
+            ));
+        }
+
+        if req.name.is_none() && req.image.is_none() && req.extra.is_empty() {
+            return Err(AuthError::bad_request(
+                "BAD_REQUEST",
+                "No fields to update",
+            ));
+        }
+
         let updated = self
             .adapter
             .update_user_profile(user_id, req.name, req.image)
@@ -875,8 +914,13 @@ impl AuthService {
     pub async fn delete_user(
         &self,
         user_id: &str,
+        session_created_at: Option<OffsetDateTime>,
         req: DeleteUserRequest,
-    ) -> Result<StatusMessageResponse, AuthError> {
+    ) -> Result<DeleteUserResponse, AuthError> {
+        if !self.config.delete_user_enabled {
+            return Err(AuthError::NotFound);
+        }
+
         if let Some(password) = req.password {
             if password.len() > self.config.max_password_length {
                 return Err(AuthError::PasswordTooLong);
@@ -894,12 +938,19 @@ impl AuthService {
             if !valid {
                 return Err(AuthError::InvalidPassword);
             }
+        } else if !self.session_fresh_age.is_zero() {
+            if let Some(created_at) = session_created_at {
+                let age = OffsetDateTime::now_utc() - created_at;
+                if age > self.session_fresh_age {
+                    return Err(AuthError::SessionNotFresh);
+                }
+            }
         }
 
         self.adapter.delete_user(user_id).await?;
         self.hooks.on_user_deleted(user_id).await;
-        Ok(StatusMessageResponse {
-            status: true,
+        Ok(DeleteUserResponse {
+            success: true,
             message: "User deleted".to_string(),
         })
     }
@@ -1770,26 +1821,22 @@ impl AuthService {
             .await?
             .ok_or_else(|| AuthError::Internal("Failed to find admin user".to_string()))?;
 
-        // Resolve the admin's original session via cookie/header token or fallback to active admin session
-        let admin_session = if let Some(tok_str) = admin_token_or_signed {
-            let clean = tok_str.split(':').next().unwrap_or(tok_str);
-            let raw = self
-                .verify_token(clean)
-                .unwrap_or_else(|| clean.to_string());
-            match self.adapter.find_session_by_token(&raw).await? {
-                Some(s) if s.user_id == admin_user.id && !s.is_expired() => s,
-                _ => {
-                    return Err(AuthError::Internal(
-                        "Failed to find admin session".to_string(),
-                    ))
-                }
+        let tok_str = admin_token_or_signed.ok_or_else(|| {
+            AuthError::Internal("Failed to find admin session".to_string())
+        })?;
+
+        let clean = tok_str.split(':').next().unwrap_or(tok_str);
+        let raw = self.verify_signed_token(clean).ok_or_else(|| {
+            AuthError::Internal("Failed to find admin session".to_string())
+        })?;
+
+        let admin_session = match self.adapter.find_session_by_token(&raw).await? {
+            Some(s) if s.user_id == admin_user.id && !s.is_expired() => s,
+            _ => {
+                return Err(AuthError::Internal(
+                    "Failed to find admin session".to_string(),
+                ))
             }
-        } else {
-            let sessions = self.adapter.list_sessions_by_user_id(&admin_user.id).await?;
-            sessions
-                .into_iter()
-                .find(|s| s.impersonated_by.is_none() && !s.is_expired())
-                .ok_or_else(|| AuthError::Internal("Failed to find admin session".to_string()))?
         };
 
         self.adapter.delete_session(&current_session.token).await?;

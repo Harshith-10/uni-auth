@@ -24,6 +24,8 @@ async fn start_test_server() -> (String, Arc<AuthService>) {
         require_email_verification: false,
         min_password_length: 8,
         max_password_length: 128,
+        delete_user_enabled: true,
+        defer_session_refresh: false,
     };
 
     let service = Arc::new(AuthService::new(config, adapter));
@@ -484,4 +486,39 @@ async fn test_admin_http_endpoints_and_cookie_impersonation() {
         .unwrap();
     assert_eq!(restored_ses.user.id, admin_signup.user.id);
     assert!(restored_ses.session.impersonated_by.is_none());
+
+    // 7. Security: Unauthenticated POST /admin/has-permission rejected with 401
+    let unauth_client = reqwest::Client::new();
+    let unauth_perm = unauth_client
+        .post(format!("{base_url}/admin/has-permission"))
+        .json(&serde_json::json!({
+            "userId": created_user.user.id,
+            "permissions": { "user": ["create"] }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth_perm.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // 8. Wire Parity: POST /get-session returns 405 Method Not Allowed without deferSessionRefresh
+    let post_sess = client
+        .post(format!("{base_url}/get-session"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(post_sess.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+
+    // 9. Wire Parity: POST /delete-user returns { "success": true, "message": "User deleted" }
+    let del_res = client
+        .post(format!("{base_url}/delete-user"))
+        .json(&serde_json::json!({
+            "password": "rootpassword123"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(del_res.status(), reqwest::StatusCode::OK);
+    let del_json: serde_json::Value = del_res.json().await.unwrap();
+    assert_eq!(del_json["success"], true);
+    assert_eq!(del_json["message"], "User deleted");
 }

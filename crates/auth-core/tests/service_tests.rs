@@ -10,7 +10,7 @@ use auth_core::{
 use auth_proto::{
     AdminBanUserRequest, AdminCreateUserRequest, AdminListUsersQuery, AdminSetRoleRequest,
     AdminSetUserPasswordRequest, ChangePasswordRequest, DeleteUserRequest,
-    RequestPasswordResetRequest, ResetPasswordRequest, RoleValue, SignInEmailRequest,
+    RequestPasswordResetRequest, ResetPasswordRequest, RoleValue, SessionWire, SignInEmailRequest,
     SignUpEmailRequest, UpdateUserRequest,
 };
 
@@ -28,6 +28,8 @@ fn create_test_service() -> (AuthService, Arc<MockEmailSender>) {
         require_email_verification: false,
         min_password_length: 8,
         max_password_length: 128,
+        delete_user_enabled: true,
+        defer_session_refresh: false,
     };
 
     let sender_trait: Arc<dyn EmailSender> = email_sender.clone();
@@ -213,10 +215,11 @@ async fn test_password_reset_revokes_all_active_sessions() {
     assert!(reset_msg.status);
 
     // Extract token from mock email
-    let sent_resets = mock_email.sent_password_resets.lock().unwrap();
-    assert_eq!(sent_resets.len(), 1);
-    let reset_token = sent_resets[0].2.clone();
-    drop(sent_resets);
+    let reset_token = {
+        let sent_resets = mock_email.sent_password_resets.lock().unwrap();
+        assert_eq!(sent_resets.len(), 1);
+        sent_resets[0].2.clone()
+    };
 
     // Reset password
     service
@@ -479,7 +482,8 @@ async fn test_scrypt_migration_and_account_unlink_and_user_lifecycle() {
             &signup.user.id,
             UpdateUserRequest {
                 name: Some("Updated Name".to_string()),
-                image: Some("https://example.com/new.png".to_string()),
+                image: Some(Some("https://example.com/new.png".to_string())),
+                ..Default::default()
             },
         )
         .await
@@ -489,6 +493,7 @@ async fn test_scrypt_migration_and_account_unlink_and_user_lifecycle() {
     service
         .delete_user(
             &signup.user.id,
+            None,
             DeleteUserRequest {
                 password: Some("rotated-password-456".to_string()),
                 callback_url: None,
@@ -738,10 +743,11 @@ async fn test_admin_plugin_rbac_ban_impersonation_and_lifecycle() {
     assert_eq!(all_member_sessions.sessions.len(), 2);
 
     // Stop impersonating restores admin session and deletes impersonated session
+    let signed_admin_token = service.sign_token(admin_signup.token.as_ref().unwrap());
     let stopped = service
         .admin_stop_impersonating(
             &imp_res.session,
-            admin_signup.token.as_deref(),
+            Some(&signed_admin_token),
         )
         .await
         .expect("stop_impersonating should restore admin session");
@@ -794,4 +800,123 @@ fn test_rate_limiter_and_totp_validator() {
     assert_eq!(code.len(), 6);
     assert!(totp.verify(secret, &code));
     assert!(!totp.verify(secret, "000000"));
+}
+
+#[tokio::test]
+async fn test_update_user_validation_and_null_image_handling() {
+    let (service, _) = create_test_service();
+
+    let signup = service
+        .sign_up_email(SignUpEmailRequest {
+            name: "Initial Name".to_string(),
+            email: "avatar@example.com".to_string(),
+            password: "password123".to_string(),
+            image: Some("https://example.com/initial.png".to_string()),
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .unwrap();
+
+    // 1. Rejecting email in /update-user
+    let mut extra_with_email = serde_json::Map::new();
+    extra_with_email.insert("email".to_string(), serde_json::Value::String("hacked@example.com".into()));
+    let email_err = service
+        .update_user(
+            &signup.user.id,
+            UpdateUserRequest {
+                name: None,
+                image: None,
+                extra: extra_with_email,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(email_err.error_code(), "EMAIL_CAN_NOT_BE_UPDATED");
+    assert_eq!(email_err.http_status(), 400);
+
+    // 2. Rejecting empty payload
+    let empty_err = service
+        .update_user(
+            &signup.user.id,
+            UpdateUserRequest {
+                name: None,
+                image: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(empty_err.http_status(), 400);
+
+    // 3. Explicit null clears image: Some(None)
+    let cleared = service
+        .update_user(
+            &signup.user.id,
+            UpdateUserRequest {
+                name: None,
+                image: Some(None),
+                extra: serde_json::Map::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.user.unwrap().image, None);
+}
+
+#[tokio::test]
+async fn test_delete_user_feature_flag_and_stop_impersonating_security() {
+    let (service, _) = create_test_service();
+
+    let signup = service
+        .sign_up_email(SignUpEmailRequest {
+            name: "Delete Me".to_string(),
+            email: "deleteme@example.com".to_string(),
+            password: "password123".to_string(),
+            image: None,
+            callback_url: None,
+            remember_me: Some(true),
+        })
+        .await
+        .unwrap();
+
+    // 1. Disabled delete-user returns 404 NOT_FOUND
+    let disabled_service = service.clone().with_delete_user_enabled(false);
+    let err = disabled_service
+        .delete_user(
+            &signup.user.id,
+            None,
+            DeleteUserRequest {
+                password: Some("password123".to_string()),
+                callback_url: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.http_status(), 404);
+
+    // 2. admin_stop_impersonating rejects missing or unsigned token
+    let fake_session = SessionWire {
+        id: "sess_fake".to_string(),
+        token: "tok_fake".to_string(),
+        user_id: signup.user.id.clone(),
+        expires_at: OffsetDateTime::now_utc() + Duration::days(1),
+        ip_address: None,
+        user_agent: None,
+        created_at: OffsetDateTime::now_utc(),
+        updated_at: OffsetDateTime::now_utc(),
+        impersonated_by: Some(signup.user.id.clone()),
+    };
+
+    let missing_token_err = service
+        .admin_stop_impersonating(&fake_session, None)
+        .await
+        .unwrap_err();
+    assert_eq!(missing_token_err.http_status(), 500);
+
+    let unsigned_err = service
+        .admin_stop_impersonating(&fake_session, Some("raw_unsigned_token_with_no_hmac"))
+        .await
+        .unwrap_err();
+    assert_eq!(unsigned_err.http_status(), 500);
 }

@@ -18,6 +18,15 @@ license = "MIT OR Apache-2.0"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+[workspace.lints.clippy]
+collapsible_if = "allow"
+chunks_exact_to_as_chunks = "allow"
+too_many_arguments = "allow"
+manual_div_ceil = "allow"
+manual_is_multiple_of = "allow"
+unnecessary_sort_by = "allow"
+large_enum_variant = "allow"
+
 [workspace.dependencies]
 # Serialization
 serde = { version = "1", features = ["derive"] }

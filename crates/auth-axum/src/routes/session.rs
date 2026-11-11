@@ -1,9 +1,9 @@
 use axum::extract::State;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
-use auth_proto::{AuthErrorResponse, RevokeSessionRequest};
+use auth_proto::{error_codes, AuthErrorResponse, RevokeSessionRequest};
 use crate::cookies::build_clear_session_cookie;
 use crate::extract::{extract_token_from_headers, CurrentSession};
 use crate::state::AuthState;
@@ -16,8 +16,17 @@ fn error_to_response(err: auth_core::AuthError) -> Response {
 
 pub async fn get_session(
     State(state): State<AuthState>,
+    method: Method,
     headers: HeaderMap,
 ) -> Response {
+    if method == Method::POST && !state.service.config().defer_session_refresh {
+        let err = AuthErrorResponse::new(
+            error_codes::METHOD_NOT_ALLOWED_DEFER_SESSION_REQUIRED,
+            "deferSessionRefresh is required for POST /get-session",
+        )
+        .with_status(405);
+        return (StatusCode::METHOD_NOT_ALLOWED, Json(err)).into_response();
+    }
     let is_bearer = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())

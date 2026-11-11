@@ -289,7 +289,7 @@ impl AuthAdapter for PostgresAuthAdapter {
         &self,
         id: &str,
         name: Option<String>,
-        image: Option<String>,
+        image: Option<Option<String>>,
     ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
         let pool = self.pool.clone();
         let id = id.to_string();
@@ -304,8 +304,8 @@ impl AuthAdapter for PostgresAuthAdapter {
             let current = map_user_row(current_row)?;
             let new_name = name.unwrap_or(current.name);
             let new_image = match image {
-                Some(img) if img.is_empty() => None,
-                Some(img) => Some(img),
+                Some(Some(img)) if !img.is_empty() => Some(img),
+                Some(_) => None,
                 None => current.image,
             };
             let now = OffsetDateTime::now_utc();

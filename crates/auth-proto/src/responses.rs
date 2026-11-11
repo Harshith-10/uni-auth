@@ -45,6 +45,14 @@ pub struct StatusMessageResponse {
     pub message: String,
 }
 
+/// Matches Better Auth `POST /delete-user` response (`{ "success": true, "message": "User deleted" }`)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteUserResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 // ──────────────────────────────────────────────
 // Authentication Responses
 // ──────────────────────────────────────────────

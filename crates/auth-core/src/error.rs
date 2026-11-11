@@ -95,6 +95,9 @@ pub enum AuthError {
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
 
+    #[error("Not found")]
+    NotFound,
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -141,6 +144,7 @@ impl AuthError {
             Self::BannedUser(_) => error_codes::BANNED_USER,
             Self::Forbidden { code, .. } | Self::BadRequest { code, .. } => code,
             Self::RateLimitExceeded => "RATE_LIMITED",
+            Self::NotFound => "NOT_FOUND",
             _ => "INTERNAL_SERVER_ERROR",
         }
     }
@@ -151,6 +155,9 @@ impl AuthError {
             Self::InvalidEmail
             | Self::PasswordTooShort
             | Self::PasswordTooLong
+            | Self::InvalidPassword
+            | Self::InvalidToken
+            | Self::TokenExpired
             | Self::CredentialAccountNotFound
             | Self::AccountNotFound
             | Self::FailedToUnlinkLastAccount
@@ -160,16 +167,13 @@ impl AuthError {
             | Self::SignUpDisabled
             | Self::BadRequest { .. } => 400,
             Self::InvalidEmailOrPassword
-            | Self::InvalidPassword
-            | Self::InvalidToken
-            | Self::TokenExpired
             | Self::SessionExpired => 401,
             Self::EmailNotVerified
             | Self::SessionNotFresh
             | Self::InvalidOrigin
             | Self::BannedUser(_)
             | Self::Forbidden { .. } => 403,
-            Self::UserNotFound | Self::ProviderNotFound(_) => 404,
+            Self::UserNotFound | Self::ProviderNotFound(_) | Self::NotFound => 404,
             Self::UserAlreadyExists => 422,
             Self::RateLimitExceeded => 429,
             _ => 500,

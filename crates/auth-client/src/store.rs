@@ -6,9 +6,10 @@ use auth_proto::{SessionAndUserResponse, SessionWire, UserWire};
 use crate::client::{BetterAuthNativeClient, ClientError};
 
 /// Reactive state of the current user session.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum AuthStatus {
     /// Initial startup state while verifying stored credentials.
+    #[default]
     Loading,
 
     /// No active or valid session exists in secure storage.
@@ -19,12 +20,6 @@ pub enum AuthStatus {
         user: UserWire,
         session: SessionWire,
     },
-}
-
-impl Default for AuthStatus {
-    fn default() -> Self {
-        Self::Loading
-    }
 }
 
 type Listener = Box<dyn Fn(&AuthStatus) + Send + Sync + 'static>;

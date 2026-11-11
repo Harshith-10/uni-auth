@@ -136,7 +136,7 @@ pub trait AuthAdapter: Send + Sync {
         &self,
         id: &str,
         name: Option<String>,
-        image: Option<String>,
+        image: Option<Option<String>>,
     ) -> BoxFuture<'static, Result<UserRecord, AdapterError>>;
     fn update_user_admin(
         &self,
@@ -352,7 +352,7 @@ impl AuthAdapter for InMemoryAuthAdapter {
         &self,
         id: &str,
         name: Option<String>,
-        image: Option<String>,
+        image: Option<Option<String>>,
     ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
         let store = Arc::clone(&self.store);
         let id = id.to_string();
@@ -362,8 +362,11 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 if let Some(n) = name {
                     user.name = n;
                 }
-                if let Some(img) = image {
-                    user.image = if img.is_empty() { None } else { Some(img) };
+                if let Some(img_opt) = image {
+                    user.image = match img_opt {
+                        Some(img) if !img.is_empty() => Some(img),
+                        _ => None,
+                    };
                 }
                 user.updated_at = OffsetDateTime::now_utc();
                 Ok(user.clone())

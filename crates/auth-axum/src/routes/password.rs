@@ -53,10 +53,19 @@ pub async fn reset_password_callback(
     }
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct ResetPasswordPostQuery {
+    pub token: Option<String>,
+}
+
 pub async fn reset_password(
     State(state): State<AuthState>,
-    Json(payload): Json<ResetPasswordRequest>,
+    Query(query): Query<ResetPasswordPostQuery>,
+    Json(mut payload): Json<ResetPasswordRequest>,
 ) -> Response {
+    if payload.token.is_none() || payload.token.as_deref() == Some("") {
+        payload.token = query.token;
+    }
     match state.service.reset_password(payload).await {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),
         Err(err) => error_to_response(err),
