@@ -165,7 +165,8 @@ impl AuthStore {
         &self,
         user_id: impl Into<String>,
     ) -> Result<SessionAndUserResponse, ClientError> {
-        let res = self.client.admin_impersonate_user(user_id).await?;
+        use crate::plugins::AdminClientExt;
+        let res = self.client.admin().impersonate_user(user_id).await?;
         self.set_status(AuthStatus::Authenticated {
             user: res.user.clone(),
             session: res.session.clone(),
@@ -175,7 +176,8 @@ impl AuthStore {
 
     /// Stops impersonating and restores `AuthStore` to the original admin session.
     pub async fn stop_impersonating(&self) -> Result<SessionAndUserResponse, ClientError> {
-        let res = self.client.admin_stop_impersonating().await?;
+        use crate::plugins::AdminClientExt;
+        let res = self.client.admin().stop_impersonating().await?;
         self.set_status(AuthStatus::Authenticated {
             user: res.user.clone(),
             session: res.session.clone(),

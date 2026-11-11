@@ -1,16 +1,27 @@
 //! High-level native HTTP client with automated Bearer token attachment and response capture.
 
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::Method;
 use thiserror::Error;
 
+use auth_proto::access::Connector;
 use auth_proto::{
-    AdminBanUserRequest, AdminCreateUserRequest, AdminListUserSessionsResponse,
-    AdminListUsersQuery, AdminListUsersResponse, AdminSetRoleRequest, AdminSetUserPasswordRequest,
-    AdminSuccessResponse, AdminUserIdRequest, AdminUserResponse, AuthErrorResponse,
-    OneTimeTokenGenerateResponse, OneTimeTokenVerifyRequest, RevokeSessionRequest, RoleValue,
-    SessionAndUserResponse, SessionWire, SignInEmailRequest, SignInResponse, SignOutResponse,
-    SignUpEmailRequest, SignUpResponse, StatusResponse,
+    AccountListEntryWire, AdminCreateUserRequest, AdminHasPermissionRequest, AdminListUsersQuery,
+    AdminListUsersResponse, AdminPermissionResponse, AdminSuccessResponse, AdminUpdateUserRequest,
+    AdminUserResponse, ChangePasswordRequest, DeleteUserRequest, DeleteUserResponse,
+    OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest,
+    RevokeSessionRequest, RoleValue, SendVerificationEmailRequest, SessionAndUserResponse,
+    SessionWire, SignInEmailRequest, SignInResponse, SignInSocialRequest, SignInSocialResponse,
+    SignOutResponse, SignUpEmailRequest, SignUpResponse, StatusResponse, UnlinkAccountRequest,
+    UpdateUserRequest, UserWire, VerifyEmailResponse,
+};
+
+use crate::plugin::{matches_core_session_signal, AuthClientPlugin, SESSION_SIGNAL};
+use crate::plugins::{
+    AdminClientExt, AdminClientPlugin, OneTimeTokenClientExt, OneTimeTokenClientPlugin,
 };
 use crate::storage::{StorageError, TokenStorage};
 
@@ -36,23 +47,26 @@ pub enum ClientError {
     OAuth(String),
 }
 
+type SignalSubscriber = Box<dyn Fn(&str) + Send + Sync + 'static>;
+
 /// Native Better Auth client designed for desktop and mobile applications.
 ///
 /// Features:
-/// - Automatically injects `Authorization: Bearer <token>` from secure storage.
-/// - Automatically intercepts `set-auth-token` response headers and updates the storage.
-/// - Automatically stashes and restores the admin session token across `admin_impersonate_user` / `admin_stop_impersonating`.
-/// - Automatically clears token storage upon `sign_out()`.
+/// - Automated Bearer token injection (`Authorization: Bearer <token>`).
+/// - Automated `set-auth-token` response header capture across all endpoints.
+/// - Client plugin ecosystem (`AuthClientPlugin`) with interceptors and typed extensions (`client.admin()`, `client.one_time_token()`).
+/// - Reactive `$sessionSignal` listeners for automatic store updates.
 #[derive(Clone)]
 pub struct BetterAuthNativeClient {
     pub(crate) base_url: String,
     pub(crate) http: reqwest::Client,
     pub(crate) storage: Arc<dyn TokenStorage>,
-    pub(crate) admin_token_backup: Arc<RwLock<Option<String>>>,
+    pub(crate) plugins: Vec<Arc<dyn AuthClientPlugin>>,
+    pub(crate) signal_subscribers: Arc<RwLock<Vec<SignalSubscriber>>>,
 }
 
 impl BetterAuthNativeClient {
-    /// Initializes a new native auth client.
+    /// Initializes a new native auth client with default `AdminClientPlugin` and `OneTimeTokenClientPlugin`.
     ///
     /// # Arguments
     /// - `base_url`: Root auth endpoint (e.g., `http://127.0.0.1:3000/api/auth`).
@@ -68,7 +82,68 @@ impl BetterAuthNativeClient {
             base_url,
             http,
             storage,
-            admin_token_backup: Arc::new(RwLock::new(None)),
+            plugins: vec![
+                Arc::new(AdminClientPlugin::default()),
+                Arc::new(OneTimeTokenClientPlugin),
+            ],
+            signal_subscribers: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Attaches an `AuthClientPlugin` to the client.
+    pub fn with_plugin<P: AuthClientPlugin>(mut self, plugin: P) -> Self {
+        self.plugins.push(Arc::new(plugin));
+        self
+    }
+
+    /// Attaches an `Arc<dyn AuthClientPlugin>` to the client.
+    pub fn with_plugin_arc(mut self, plugin: Arc<dyn AuthClientPlugin>) -> Self {
+        self.plugins.push(plugin);
+        self
+    }
+
+    pub fn plugins(&self) -> &[Arc<dyn AuthClientPlugin>] {
+        &self.plugins
+    }
+
+    /// Retrieves a registered `AuthClientPlugin` by type.
+    pub fn get_plugin<P: AuthClientPlugin>(&self) -> Option<&P> {
+        self.plugins.iter().find_map(|p| p.as_any().downcast_ref::<P>())
+    }
+
+    /// Subscribes to reactive signals emitted by this client (e.g. `$sessionSignal`).
+    pub fn subscribe_signal<F: Fn(&str) + Send + Sync + 'static>(&self, listener: F) {
+        if let Ok(mut subs) = self.signal_subscribers.write() {
+            subs.push(Box::new(listener));
+        }
+    }
+
+    pub(crate) async fn notify_matching_signals(&self, path: &str) {
+        let is_session_signal = matches_core_session_signal(path)
+            || self.plugins.iter().any(|p| {
+                p.signal_listeners()
+                    .iter()
+                    .any(|l| l.signal == SESSION_SIGNAL && (l.matcher)(path))
+            });
+
+        if is_session_signal {
+            if let Ok(subs) = self.signal_subscribers.read() {
+                for sub in subs.iter() {
+                    sub(SESSION_SIGNAL);
+                }
+            }
+        }
+
+        for p in &self.plugins {
+            for l in p.signal_listeners() {
+                if l.signal != SESSION_SIGNAL && (l.matcher)(path) {
+                    if let Ok(subs) = self.signal_subscribers.read() {
+                        for sub in subs.iter() {
+                            sub(l.signal);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -81,8 +156,7 @@ impl BetterAuthNativeClient {
     }
 
     /// Captures the `set-auth-token` response header and saves it to storage.
-    /// Returns `true` if a non-empty `set-auth-token` header was found and saved.
-    fn handle_auth_token_header(&self, headers: &HeaderMap) -> bool {
+    pub(crate) fn handle_auth_token_header(&self, headers: &HeaderMap) -> bool {
         if let Some(token_header) = headers.get("set-auth-token") {
             if let Ok(token_str) = token_header.to_str() {
                 let token = auth_proto::url_decode(token_str.trim());
@@ -96,7 +170,7 @@ impl BetterAuthNativeClient {
     }
 
     /// Prepares request headers with `Authorization: Bearer <token>` if a token is present in storage.
-    fn prepare_headers(&self) -> HeaderMap {
+    pub(crate) fn prepare_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
@@ -110,673 +184,8 @@ impl BetterAuthNativeClient {
         headers
     }
 
-    // ──────────────────────────────────────────────
-    // Authentication Operations
-    // ──────────────────────────────────────────────
-
-    /// Signs up a new user using email and password.
-    pub async fn sign_up_email(
-        &self,
-        name: impl Into<String>,
-        email: impl Into<String>,
-        password: impl Into<String>,
-        remember_me: Option<bool>,
-    ) -> Result<SignUpResponse, ClientError> {
-        let payload = SignUpEmailRequest {
-            name: name.into(),
-            email: email.into(),
-            password: password.into(),
-            image: None,
-            callback_url: None,
-            remember_me,
-        };
-
-        let res = self
-            .http
-            .post(format!("{}/sign-up/email", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&payload)
-            .send()
-            .await?;
-
-        let captured_header = self.handle_auth_token_header(res.headers());
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("SIGN_UP_FAILED", "Failed to sign up").with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        let body: SignUpResponse = res.json().await?;
-        if !captured_header {
-            if let Some(ref token) = body.token {
-                let _ = self.storage.set_token(token);
-            }
-        }
-
-        Ok(body)
-    }
-
-    /// Signs in an existing user using email and password.
-    pub async fn sign_in_email(
-        &self,
-        email: impl Into<String>,
-        password: impl Into<String>,
-        remember_me: Option<bool>,
-    ) -> Result<SignInResponse, ClientError> {
-        let payload = SignInEmailRequest {
-            email: email.into(),
-            password: password.into(),
-            callback_url: None,
-            remember_me,
-        };
-
-        let res = self
-            .http
-            .post(format!("{}/sign-in/email", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&payload)
-            .send()
-            .await?;
-
-        let captured_header = self.handle_auth_token_header(res.headers());
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("SIGN_IN_FAILED", "Invalid credentials").with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        let body: SignInResponse = res.json().await?;
-        if !captured_header {
-            let _ = self.storage.set_token(&body.token);
-        }
-
-        Ok(body)
-    }
-
-    /// Retrieves the current session and user details.
-    /// Returns `None` if unauthenticated or session has expired.
-    pub async fn get_session(&self) -> Result<Option<SessionAndUserResponse>, ClientError> {
-        let res = self
-            .http
-            .get(format!("{}/get-session", self.base_url))
-            .headers(self.prepare_headers())
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            return Ok(None);
-        }
-
-        let text = res.text().await?;
-        if text.trim() == "null" || text.trim().is_empty() {
-            return Ok(None);
-        }
-
-        let session: SessionAndUserResponse = serde_json::from_str(&text)?;
-        Ok(Some(session))
-    }
-
-    /// Lists active sessions for the current user.
-    pub async fn list_sessions(&self) -> Result<Vec<SessionWire>, ClientError> {
-        let res = self
-            .http
-            .get(format!("{}/list-sessions", self.base_url))
-            .headers(self.prepare_headers())
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("LIST_SESSIONS_FAILED", "Failed to list sessions")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        let sessions: Vec<SessionWire> = res.json().await?;
-        Ok(sessions)
-    }
-
-    /// Revokes a specific session by token.
-    pub async fn revoke_session(&self, token: &str) -> Result<StatusResponse, ClientError> {
-        let res = self
-            .http
-            .post(format!("{}/revoke-session", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&RevokeSessionRequest {
-                token: token.to_string(),
-            })
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("REVOKE_SESSION_FAILED", "Failed to revoke session")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        let body: StatusResponse = res.json().await?;
-        Ok(body)
-    }
-
-    /// Signs out the user, invalidates the remote session, and clears local token storage.
-    pub async fn sign_out(&self) -> Result<SignOutResponse, ClientError> {
-        let res = self
-            .http
-            .post(format!("{}/sign-out", self.base_url))
-            .headers(self.prepare_headers())
-            .send()
-            .await?;
-
-        // Always delete local token regardless of server response
-        let _ = self.storage.delete_token();
-        if let Ok(mut backup) = self.admin_token_backup.write() {
-            *backup = None;
-        }
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("SIGN_OUT_FAILED", "Sign out error").with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        let body: SignOutResponse = res.json().await?;
-        Ok(body)
-    }
-
-    // ──────────────────────────────────────────────
-    // One-Time Token (OTT) Operations
-    // ──────────────────────────────────────────────
-
-    /// Generates a single-use 3-minute token from the current session.
-    pub async fn generate_one_time_token(&self) -> Result<OneTimeTokenGenerateResponse, ClientError> {
-        let res = self
-            .http
-            .get(format!("{}/one-time-token/generate", self.base_url))
-            .headers(self.prepare_headers())
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("OTT_GENERATE_FAILED", "Failed to generate token")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        let body: OneTimeTokenGenerateResponse = res.json().await?;
-        Ok(body)
-    }
-
-    /// Verifies a one-time token and establishes a new session in storage.
-    pub async fn verify_one_time_token(
-        &self,
-        token: &str,
-    ) -> Result<SessionAndUserResponse, ClientError> {
-        let res = self
-            .http
-            .post(format!("{}/one-time-token/verify", self.base_url))
-            .json(&OneTimeTokenVerifyRequest {
-                token: token.to_string(),
-            })
-            .send()
-            .await?;
-
-        let captured_header = self.handle_auth_token_header(res.headers());
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("OTT_VERIFY_FAILED", "Invalid or expired token")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        let body: SessionAndUserResponse = res.json().await?;
-
-        // If set-auth-token header was present, it was saved above.
-        // Otherwise, save session token directly:
-        if !captured_header && self.storage.get_token()?.is_none() {
-            let _ = self.storage.set_token(&body.session.token);
-        }
-
-        Ok(body)
-    }
-
-    // ──────────────────────────────────────────────
-    // Admin Plugin Operations
-    // ──────────────────────────────────────────────
-
-    /// Lists users via `GET /api/auth/admin/list-users`.
-    pub async fn admin_list_users(
-        &self,
-        query: &AdminListUsersQuery,
-    ) -> Result<AdminListUsersResponse, ClientError> {
-        let res = self
-            .http
-            .get(format!("{}/admin/list-users", self.base_url))
-            .headers(self.prepare_headers())
-            .query(query)
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_LIST_USERS_FAILED", "Failed to list users")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Creates a new user as an admin (`POST /api/auth/admin/create-user`).
-    pub async fn admin_create_user(
-        &self,
-        payload: AdminCreateUserRequest,
-    ) -> Result<AdminUserResponse, ClientError> {
-        let res = self
-            .http
-            .post(format!("{}/admin/create-user", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&payload)
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_CREATE_USER_FAILED", "Failed to create user")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Updates a user's role (`POST /api/auth/admin/set-role`).
-    pub async fn admin_set_role(
-        &self,
-        user_id: impl Into<String>,
-        role: impl Into<RoleValue>,
-    ) -> Result<AdminUserResponse, ClientError> {
-        let payload = AdminSetRoleRequest {
-            user_id: user_id.into(),
-            role: role.into(),
-        };
-
-        let res = self
-            .http
-            .post(format!("{}/admin/set-role", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&payload)
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_SET_ROLE_FAILED", "Failed to set role")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Bans a user (`POST /api/auth/admin/ban-user`).
-    pub async fn admin_ban_user(
-        &self,
-        user_id: impl Into<String>,
-        ban_reason: Option<String>,
-        ban_expires_in: Option<i64>,
-    ) -> Result<AdminUserResponse, ClientError> {
-        let payload = AdminBanUserRequest {
-            user_id: user_id.into(),
-            ban_reason,
-            ban_expires_in,
-        };
-
-        let res = self
-            .http
-            .post(format!("{}/admin/ban-user", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&payload)
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_BAN_USER_FAILED", "Failed to ban user")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Unbans a user (`POST /api/auth/admin/unban-user`).
-    pub async fn admin_unban_user(
-        &self,
-        user_id: impl Into<String>,
-    ) -> Result<AdminUserResponse, ClientError> {
-        let payload = AdminUserIdRequest {
-            user_id: user_id.into(),
-        };
-
-        let res = self
-            .http
-            .post(format!("{}/admin/unban-user", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&payload)
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_UNBAN_USER_FAILED", "Failed to unban user")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Impersonates a user (`POST /api/auth/admin/impersonate-user`), stashing the admin's
-    /// original token so `admin_stop_impersonating` can restore it.
-    pub async fn admin_impersonate_user(
-        &self,
-        user_id: impl Into<String>,
-    ) -> Result<SessionAndUserResponse, ClientError> {
-        let previous_token = self.storage.get_token().ok().flatten();
-
-        let res = self
-            .http
-            .post(format!("{}/admin/impersonate-user", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&AdminUserIdRequest {
-                user_id: user_id.into(),
-            })
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_IMPERSONATE_FAILED", "Failed to impersonate user")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        // Stash admin token from header or previous storage
-        let stashed = res
-            .headers()
-            .get("set-admin-auth-token")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().to_string())
-            .or(previous_token);
-
-        if let Ok(mut guard) = self.admin_token_backup.write() {
-            *guard = stashed;
-        }
-
-        let captured = self.handle_auth_token_header(res.headers());
-        let body: SessionAndUserResponse = res.json().await?;
-        if !captured {
-            let _ = self.storage.set_token(&body.session.token);
-        }
-
-        Ok(body)
-    }
-
-    /// Stops impersonating and restores the original admin session (`POST /api/auth/admin/stop-impersonating`).
-    pub async fn admin_stop_impersonating(&self) -> Result<SessionAndUserResponse, ClientError> {
-        let mut headers = self.prepare_headers();
-        let stashed = self.admin_token_backup.read().ok().and_then(|g| g.clone());
-        if let Some(ref admin_tok) = stashed {
-            if let Ok(hv) = HeaderValue::from_str(admin_tok) {
-                headers.insert("x-admin-auth-token", hv);
-            }
-        }
-
-        let res = self
-            .http
-            .post(format!("{}/admin/stop-impersonating", self.base_url))
-            .headers(headers)
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("STOP_IMPERSONATING_FAILED", "Failed to stop impersonating")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        let captured = self.handle_auth_token_header(res.headers());
-        let body: SessionAndUserResponse = res.json().await?;
-        if !captured {
-            let _ = self.storage.set_token(&body.session.token);
-        }
-        if let Ok(mut guard) = self.admin_token_backup.write() {
-            *guard = None;
-        }
-
-        Ok(body)
-    }
-
-    /// Permanently removes a user (`POST /api/auth/admin/remove-user`).
-    pub async fn admin_remove_user(
-        &self,
-        user_id: impl Into<String>,
-    ) -> Result<AdminSuccessResponse, ClientError> {
-        let res = self
-            .http
-            .post(format!("{}/admin/remove-user", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&AdminUserIdRequest {
-                user_id: user_id.into(),
-            })
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_REMOVE_USER_FAILED", "Failed to remove user")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Sets a user's password as an admin (`POST /api/auth/admin/set-user-password`).
-    pub async fn admin_set_user_password(
-        &self,
-        user_id: impl Into<String>,
-        new_password: impl Into<String>,
-    ) -> Result<StatusResponse, ClientError> {
-        let res = self
-            .http
-            .post(format!("{}/admin/set-user-password", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&AdminSetUserPasswordRequest {
-                user_id: user_id.into(),
-                new_password: new_password.into(),
-            })
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_SET_PASSWORD_FAILED", "Failed to set password")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Lists all active sessions for a specific user (`POST /api/auth/admin/list-user-sessions`).
-    pub async fn admin_list_user_sessions(
-        &self,
-        user_id: impl Into<String>,
-    ) -> Result<AdminListUserSessionsResponse, ClientError> {
-        let res = self
-            .http
-            .post(format!("{}/admin/list-user-sessions", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&AdminUserIdRequest {
-                user_id: user_id.into(),
-            })
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_LIST_SESSIONS_FAILED", "Failed to list user sessions")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Revokes all active sessions for a specific user (`POST /api/auth/admin/revoke-user-sessions`).
-    pub async fn admin_revoke_user_sessions(
-        &self,
-        user_id: impl Into<String>,
-    ) -> Result<AdminSuccessResponse, ClientError> {
-        let res = self
-            .http
-            .post(format!("{}/admin/revoke-user-sessions", self.base_url))
-            .headers(self.prepare_headers())
-            .json(&AdminUserIdRequest {
-                user_id: user_id.into(),
-            })
-            .send()
-            .await?;
-
-        let status = res.status().as_u16();
-        if status >= 400 {
-            let err_body: AuthErrorResponse = res.json().await.unwrap_or_else(|_| {
-                AuthErrorResponse::new("ADMIN_REVOKE_SESSIONS_FAILED", "Failed to revoke sessions")
-                    .with_status(status)
-            });
-            return Err(ClientError::Api {
-                status,
-                code: err_body.code,
-                message: err_body.message,
-            });
-        }
-
-        Ok(res.json().await?)
-    }
-
-    /// Custom authenticated request helper for calling application-specific protected APIs.
-    ///
-    /// Automatically injects `Authorization: Bearer <token>`.
+    /// Executes a request to an arbitrary protected endpoint (e.g. `/api/saas/me`),
+    /// automatically injecting `Authorization: Bearer <token>` and intercepting `set-auth-token`.
     pub async fn fetch_protected<T: serde::de::DeserializeOwned>(
         &self,
         method: reqwest::Method,
@@ -790,8 +199,9 @@ impl BetterAuthNativeClient {
         }
 
         let res = builder.send().await?;
-        let status = res.status().as_u16();
+        self.handle_auth_token_header(res.headers());
 
+        let status = res.status().as_u16();
         if status >= 400 {
             let text = res.text().await.unwrap_or_default();
             return Err(ClientError::Api {
@@ -803,5 +213,449 @@ impl BetterAuthNativeClient {
 
         let parsed: T = res.json().await?;
         Ok(parsed)
+    }
+
+    // ──────────────────────────────────────────────
+    // Core Authentication Endpoints
+    // ──────────────────────────────────────────────
+
+    /// Signs up a new user using email and password.
+    pub async fn sign_up_email(
+        &self,
+        name: impl Into<String>,
+        email: impl Into<String>,
+        password: impl Into<String>,
+        remember_me: Option<bool>,
+    ) -> Result<SignUpResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/sign-up/email",
+            None::<&()>,
+            Some(&SignUpEmailRequest {
+                name: name.into(),
+                email: email.into(),
+                password: password.into(),
+                image: None,
+                callback_url: None,
+                remember_me,
+            }),
+        )
+        .await
+    }
+
+    /// Signs in an existing user with email and password.
+    pub async fn sign_in_email(
+        &self,
+        email: impl Into<String>,
+        password: impl Into<String>,
+        remember_me: Option<bool>,
+    ) -> Result<SignInResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/sign-in/email",
+            None::<&()>,
+            Some(&SignInEmailRequest {
+                email: email.into(),
+                password: password.into(),
+                callback_url: None,
+                remember_me,
+            }),
+        )
+        .await
+    }
+
+    /// Retrieves the active user session and user record.
+    pub async fn get_session(&self) -> Result<Option<SessionAndUserResponse>, ClientError> {
+        self.send_auth_request(
+            Method::GET,
+            "/get-session",
+            None::<&()>,
+            None::<&()>,
+        )
+        .await
+    }
+
+    /// Lists active sessions for the currently authenticated user.
+    pub async fn list_sessions(&self) -> Result<Vec<SessionWire>, ClientError> {
+        self.send_auth_request(
+            Method::GET,
+            "/list-sessions",
+            None::<&()>,
+            None::<&()>,
+        )
+        .await
+    }
+
+    /// Revokes a specific session by token or session ID.
+    pub async fn revoke_session(
+        &self,
+        session_token: impl Into<String>,
+    ) -> Result<StatusResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/revoke-session",
+            None::<&()>,
+            Some(&RevokeSessionRequest {
+                token: session_token.into(),
+            }),
+        )
+        .await
+    }
+
+    /// Revokes all active sessions for the currently authenticated user.
+    pub async fn revoke_sessions(&self) -> Result<StatusResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/revoke-sessions",
+            None::<&()>,
+            None::<&()>,
+        )
+        .await
+    }
+
+    /// Revokes all sessions belonging to the current user EXCEPT the current session.
+    pub async fn revoke_other_sessions(&self) -> Result<StatusResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/revoke-other-sessions",
+            None::<&()>,
+            None::<&()>,
+        )
+        .await
+    }
+
+    /// Signs out the current user and clears the token from storage.
+    pub async fn sign_out(&self) -> Result<SignOutResponse, ClientError> {
+        let res = self
+            .send_auth_request(
+                Method::POST,
+                "/sign-out",
+                None::<&()>,
+                None::<&()>,
+            )
+            .await;
+        let _ = self.storage.delete_token();
+        res
+    }
+
+    /// Changes user password, optionally revoking other sessions.
+    pub async fn change_password(
+        &self,
+        current_password: impl Into<String>,
+        new_password: impl Into<String>,
+        revoke_other_sessions: Option<bool>,
+    ) -> Result<StatusResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/change-password",
+            None::<&()>,
+            Some(&ChangePasswordRequest {
+                current_password: current_password.into(),
+                new_password: new_password.into(),
+                revoke_other_sessions,
+            }),
+        )
+        .await
+    }
+
+    /// Updates the current user's profile information (name and/or image).
+    pub async fn update_user(
+        &self,
+        name: Option<String>,
+        image: Option<Option<String>>,
+    ) -> Result<UserWire, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/update-user",
+            None::<&()>,
+            Some(&UpdateUserRequest {
+                name,
+                image,
+                extra: serde_json::Map::new(),
+            }),
+        )
+        .await
+    }
+
+    /// Deletes the current user account and clears secure storage.
+    pub async fn delete_user(
+        &self,
+        password: Option<String>,
+        callback_url: Option<String>,
+    ) -> Result<DeleteUserResponse, ClientError> {
+        let res = self
+            .send_auth_request(
+                Method::POST,
+                "/delete-user",
+                None::<&()>,
+                Some(&DeleteUserRequest {
+                    password,
+                    callback_url,
+                }),
+            )
+            .await;
+        if res.is_ok() {
+            let _ = self.storage.delete_token();
+        }
+        res
+    }
+
+    /// Initiates a password reset email request.
+    pub async fn request_password_reset(
+        &self,
+        email: impl Into<String>,
+        redirect_to: Option<String>,
+    ) -> Result<StatusResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/request-password-reset",
+            None::<&()>,
+            Some(&RequestPasswordResetRequest {
+                email: email.into(),
+                redirect_to,
+            }),
+        )
+        .await
+    }
+
+    /// Resets a password using a verification token received via email.
+    pub async fn reset_password(
+        &self,
+        new_password: impl Into<String>,
+        token: impl Into<String>,
+    ) -> Result<StatusResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/reset-password",
+            None::<&()>,
+            Some(&ResetPasswordRequest {
+                new_password: new_password.into(),
+                token: Some(token.into()),
+            }),
+        )
+        .await
+    }
+
+    /// Sends or re-sends an email verification email to the current user.
+    pub async fn send_verification_email(
+        &self,
+        email: impl Into<String>,
+        callback_url: Option<String>,
+    ) -> Result<StatusResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/send-verification-email",
+            None::<&()>,
+            Some(&SendVerificationEmailRequest {
+                email: email.into(),
+                callback_url,
+            }),
+        )
+        .await
+    }
+
+    /// Verifies an email address using a verification token.
+    pub async fn verify_email(
+        &self,
+        token: impl Into<String>,
+        callback_url: Option<String>,
+    ) -> Result<VerifyEmailResponse, ClientError> {
+        #[derive(serde::Serialize)]
+        struct VerifyEmailQuery {
+            token: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            callback_url: Option<String>,
+        }
+        self.send_auth_request(
+            Method::GET,
+            "/verify-email",
+            Some(&VerifyEmailQuery {
+                token: token.into(),
+                callback_url,
+            }),
+            None::<&()>,
+        )
+        .await
+    }
+
+    /// Lists connected OAuth accounts for the current user.
+    pub async fn list_accounts(&self) -> Result<Vec<AccountListEntryWire>, ClientError> {
+        self.send_auth_request(
+            Method::GET,
+            "/list-accounts",
+            None::<&()>,
+            None::<&()>,
+        )
+        .await
+    }
+
+    /// Unlinks a connected OAuth account.
+    pub async fn unlink_account(
+        &self,
+        provider_id: impl Into<String>,
+        account_id: impl Into<String>,
+    ) -> Result<StatusResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/unlink-account",
+            None::<&()>,
+            Some(&UnlinkAccountRequest {
+                provider_id: provider_id.into(),
+                account_id: Some(account_id.into()),
+            }),
+        )
+        .await
+    }
+
+    /// Initiates a social account link.
+    pub async fn link_social(
+        &self,
+        provider: impl Into<String>,
+        callback_url: Option<String>,
+    ) -> Result<SignInSocialResponse, ClientError> {
+        self.send_auth_request(
+            Method::POST,
+            "/link-social",
+            None::<&()>,
+            Some(&SignInSocialRequest {
+                provider: provider.into(),
+                callback_url,
+                error_callback_url: None,
+                disable_redirect: Some(true),
+                ..Default::default()
+            }),
+        )
+        .await
+    }
+
+    // ──────────────────────────────────────────────
+    // Legacy Delegating Methods (For Full Backward Compatibility)
+    // ──────────────────────────────────────────────
+
+    /// Generates a single-use one-time token (OTT).
+    pub async fn generate_one_time_token(&self) -> Result<OneTimeTokenGenerateResponse, ClientError> {
+        self.one_time_token().generate().await
+    }
+
+    /// Exchanges an OTT for an authenticated session.
+    pub async fn verify_one_time_token(
+        &self,
+        token: impl Into<String>,
+    ) -> Result<SessionAndUserResponse, ClientError> {
+        self.one_time_token().verify(token).await
+    }
+
+    pub async fn admin_list_users(
+        &self,
+        query: &AdminListUsersQuery,
+    ) -> Result<AdminListUsersResponse, ClientError> {
+        self.admin().list_users(query).await
+    }
+
+    pub async fn admin_create_user(
+        &self,
+        req: AdminCreateUserRequest,
+    ) -> Result<AdminUserResponse, ClientError> {
+        self.admin().create_user(req).await
+    }
+
+    pub async fn admin_set_role(
+        &self,
+        user_id: impl Into<String>,
+        role: impl Into<RoleValue>,
+    ) -> Result<AdminUserResponse, ClientError> {
+        self.admin().set_role(user_id, role).await
+    }
+
+    pub async fn admin_get_user(&self, id: impl Into<String>) -> Result<UserWire, ClientError> {
+        self.admin().get_user(id).await
+    }
+
+    pub async fn admin_update_user(
+        &self,
+        req: AdminUpdateUserRequest,
+    ) -> Result<UserWire, ClientError> {
+        self.admin().update_user(req).await
+    }
+
+    pub async fn admin_ban_user(
+        &self,
+        user_id: impl Into<String>,
+        ban_reason: Option<String>,
+        ban_expires_in: Option<i64>,
+    ) -> Result<AdminUserResponse, ClientError> {
+        self.admin().ban_user(user_id, ban_reason, ban_expires_in).await
+    }
+
+    pub async fn admin_unban_user(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<AdminUserResponse, ClientError> {
+        self.admin().unban_user(user_id).await
+    }
+
+    pub async fn admin_impersonate_user(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<SessionAndUserResponse, ClientError> {
+        self.admin().impersonate_user(user_id).await
+    }
+
+    pub async fn admin_stop_impersonating(&self) -> Result<SessionAndUserResponse, ClientError> {
+        self.admin().stop_impersonating().await
+    }
+
+    pub async fn admin_revoke_user_session(
+        &self,
+        session_token: impl Into<String>,
+    ) -> Result<AdminSuccessResponse, ClientError> {
+        self.admin().revoke_user_session(session_token).await
+    }
+
+    pub async fn admin_revoke_user_sessions(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<AdminSuccessResponse, ClientError> {
+        self.admin().revoke_user_sessions(user_id).await
+    }
+
+    pub async fn admin_remove_user(
+        &self,
+        user_id: impl Into<String>,
+    ) -> Result<AdminSuccessResponse, ClientError> {
+        self.admin().remove_user(user_id).await
+    }
+
+    pub async fn admin_set_user_password(
+        &self,
+        user_id: impl Into<String>,
+        new_password: impl Into<String>,
+    ) -> Result<StatusResponse, ClientError> {
+        self.admin().set_user_password(user_id, new_password).await
+    }
+
+    pub async fn admin_has_permission(
+        &self,
+        req: AdminHasPermissionRequest,
+    ) -> Result<AdminPermissionResponse, ClientError> {
+        self.admin().has_permission(req).await
+    }
+
+    pub fn admin_check_role_permission(
+        &self,
+        role_csv: &str,
+        permissions: &HashMap<String, Vec<String>>,
+    ) -> bool {
+        self.admin().check_role_permission(role_csv, permissions)
+    }
+
+    pub fn admin_check_role_permission_with_connector(
+        &self,
+        role_csv: &str,
+        permissions: &HashMap<String, Vec<String>>,
+        connector: Connector,
+    ) -> bool {
+        self.admin()
+            .check_role_permission_with_connector(role_csv, permissions, connector)
     }
 }

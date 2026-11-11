@@ -7,12 +7,14 @@
 //!
 //! All JSON field names use `camelCase` to match the Better Auth TypeScript wire protocol.
 
+pub mod access;
 pub mod error;
 pub mod models;
 pub mod requests;
 pub mod responses;
 pub mod url_utils;
 
+pub use access::{AccessControl, Connector, RolePermissions};
 pub use error::*;
 pub use models::*;
 pub use requests::*;

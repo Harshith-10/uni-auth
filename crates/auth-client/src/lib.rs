@@ -9,10 +9,19 @@
 
 pub mod client;
 pub mod loopback;
+pub mod plugin;
+pub mod plugins;
 pub mod storage;
 pub mod store;
+pub mod transport;
 
 pub use client::{BetterAuthNativeClient, ClientError};
 pub use loopback::{start_loopback_listener, start_loopback_listener_with_timeout};
+pub use plugin::{AuthClientPlugin, ClientSignalListener, SESSION_SIGNAL};
+pub use plugins::{
+    AdminClientExt, AdminClientHandle, AdminClientPlugin, OneTimeTokenClientExt,
+    OneTimeTokenClientHandle, OneTimeTokenClientPlugin,
+};
 pub use storage::{KeyringTokenStorage, MockTokenStorage, StorageError, TokenStorage};
 pub use store::{AuthStatus, AuthStore};
+pub use transport::{ClientRequestContext, ClientResponseContext};

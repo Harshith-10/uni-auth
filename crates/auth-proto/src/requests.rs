@@ -85,7 +85,7 @@ pub struct SignInEmailRequest {
 /// `POST /api/auth/sign-in/social`
 ///
 /// Reference: `.reference/better-auth/.../sign-in.ts` lines 31-195
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SignInSocialRequest {
     /// OAuth provider identifier (e.g., "google", "github")
