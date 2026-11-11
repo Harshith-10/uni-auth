@@ -9,6 +9,7 @@ use axum::response::Response;
 use axum::Router;
 
 use auth_core::plugin::EndpointHookContext;
+use auth_core::{BearerPlugin, OneTimeTokenPlugin};
 
 use crate::state::AuthState;
 
@@ -125,4 +126,43 @@ pub async fn endpoint_hooks_middleware(
     }
 
     response
+}
+
+impl AxumAuthPlugin for OneTimeTokenPlugin {
+    fn plugin_id(&self) -> &'static str {
+        "one-time-token"
+    }
+
+    fn declared_routes(&self) -> Vec<RouteDescriptor> {
+        vec![
+            RouteDescriptor::new("/one-time-token/generate", &["GET"]),
+            RouteDescriptor::new("/one-time-token/verify", &["POST"]),
+        ]
+    }
+
+    fn router(&self) -> Router<AuthState> {
+        Router::new()
+            .route(
+                "/one-time-token/generate",
+                axum::routing::get(crate::routes::one_time_token::generate_one_time_token),
+            )
+            .route(
+                "/one-time-token/verify",
+                axum::routing::post(crate::routes::one_time_token::verify_one_time_token),
+            )
+    }
+}
+
+impl AxumAuthPlugin for BearerPlugin {
+    fn plugin_id(&self) -> &'static str {
+        "bearer"
+    }
+
+    fn declared_routes(&self) -> Vec<RouteDescriptor> {
+        Vec::new()
+    }
+
+    fn router(&self) -> Router<AuthState> {
+        Router::new()
+    }
 }

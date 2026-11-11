@@ -8,10 +8,13 @@ use auth_core::adapter::{AuthAdapter, BoxFuture};
 use auth_core::error::AuthError;
 use auth_core::models::*;
 use auth_core::plugin::{
-    BetterAuthPlugin, DatabaseHooks, HookOutcome, PluginMigration, PluginRateLimitRule,
-    UserUpdatePatch,
+    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookOutcome, PluginMigration,
+    PluginRateLimitRule, UserUpdatePatch,
 };
-use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
+use auth_core::{
+    AuthConfig, AuthService, BearerConfig, BearerPlugin, InMemoryAuthAdapter, OneTimeTokenConfig,
+    OneTimeTokenPlugin, OttStoreTokenMode,
+};
 
 // ──────────────────────────────────────────────
 // Test Database Hook Implementation
@@ -354,4 +357,201 @@ fn test_plugin_downcasting_and_metadata() {
     assert_eq!(rate_limits[0].id, "sample_limit");
     assert!((rate_limits[0].path_matcher)("/sample/action"));
     assert!(!(rate_limits[0].path_matcher)("/other"));
+}
+
+#[tokio::test]
+async fn test_bearer_plugin_before_and_after_endpoint() {
+    let hooks = Arc::new(CustomHooks::default());
+    let (mut service, _) = create_test_service_with_plugin(hooks);
+    let bearer = BearerPlugin::new();
+    service = service.with_plugin(bearer);
+
+    // 1. Before endpoint hook: convert Bearer token to cookie header
+    let raw_token = "raw_sample_session_token_12345";
+    let mut ctx = EndpointHookContext {
+        path: "/api/saas/me".to_string(),
+        method: "GET".to_string(),
+        request_headers: [("authorization".to_string(), format!("Bearer {raw_token}"))]
+            .into_iter()
+            .collect(),
+        response_headers: Default::default(),
+        response_body: None,
+        new_session: None,
+    };
+
+    service
+        .plugins()
+        .run_before_endpoint(&mut ctx, &service)
+        .await
+        .unwrap();
+
+    let cookie_val = ctx.request_headers.get("cookie");
+    assert!(cookie_val.is_some());
+    let cookie = cookie_val.unwrap();
+    assert!(cookie.contains("better-auth.session_token="));
+    assert!(cookie.contains(raw_token));
+
+    // 2. Strict mode: with require_signature, unsigned token is not converted
+    let strict_bearer = BearerPlugin {
+        config: BearerConfig {
+            require_signature: true,
+        },
+    };
+    let mut strict_ctx = EndpointHookContext {
+        path: "/api/saas/me".to_string(),
+        method: "GET".to_string(),
+        request_headers: [("authorization".to_string(), format!("Bearer {raw_token}"))]
+            .into_iter()
+            .collect(),
+        response_headers: Default::default(),
+        response_body: None,
+        new_session: None,
+    };
+    strict_bearer
+        .on_before_endpoint(&mut strict_ctx, &service)
+        .await
+        .unwrap();
+    assert!(strict_ctx.request_headers.get("cookie").is_none());
+
+    // 3. After endpoint hook: Set-Cookie in response emits set-auth-token and exposes header
+    let mut after_ctx = EndpointHookContext {
+        path: "/sign-in/email".to_string(),
+        method: "POST".to_string(),
+        request_headers: Default::default(),
+        response_headers: [(
+            "set-cookie".to_string(),
+            format!("better-auth.session_token={raw_token}; Path=/; HttpOnly"),
+        )]
+        .into_iter()
+        .collect(),
+        response_body: None,
+        new_session: None,
+    };
+    service
+        .plugins()
+        .run_after_endpoint(&mut after_ctx, &service)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        after_ctx.response_headers.get("set-auth-token").unwrap(),
+        raw_token
+    );
+    assert!(after_ctx
+        .response_headers
+        .get("access-control-expose-headers")
+        .unwrap()
+        .contains("set-auth-token"));
+
+    // 4. Cleared cookie (Max-Age=0) must NOT emit set-auth-token
+    let mut clear_ctx = EndpointHookContext {
+        path: "/sign-out".to_string(),
+        method: "POST".to_string(),
+        request_headers: Default::default(),
+        response_headers: [(
+            "set-cookie".to_string(),
+            "better-auth.session_token=; Max-Age=0; Path=/".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+        response_body: None,
+        new_session: None,
+    };
+    service
+        .plugins()
+        .run_after_endpoint(&mut clear_ctx, &service)
+        .await
+        .unwrap();
+    assert!(clear_ctx.response_headers.get("set-auth-token").is_none());
+}
+
+#[tokio::test]
+async fn test_one_time_token_plugin_atomic_consumption_and_hashing() {
+    let hooks = Arc::new(CustomHooks::default());
+    let (mut service, _) = create_test_service_with_plugin(hooks);
+
+    // Test with HashedSha256 storage mode
+    let ott_plugin = OneTimeTokenPlugin {
+        config: OneTimeTokenConfig {
+            expires_in: time::Duration::minutes(3),
+            disable_client_request: false,
+            disable_set_session_cookie: false,
+            store_token: OttStoreTokenMode::HashedSha256,
+            set_ott_header_on_new_session: true,
+        },
+    };
+    service = service.with_plugin(ott_plugin.clone());
+
+    // Create user and session
+    let user = service
+        .adapter()
+        .create_user(CreateUserInput {
+            id: None,
+            name: "OTT Test".to_string(),
+            email: "ott_test@example.com".to_string(),
+            image: None,
+            email_verified: true,
+            role: None,
+        })
+        .await
+        .unwrap();
+
+    let session = service
+        .adapter()
+        .create_session(CreateSessionInput {
+            id: None,
+            user_id: user.id.clone(),
+            token: "active_session_token_xyz".to_string(),
+            expires_at: time::OffsetDateTime::now_utc() + time::Duration::days(1),
+            ip_address: None,
+            user_agent: None,
+        })
+        .await
+        .unwrap();
+
+    // 1. Generate OTT
+    let ott_res = ott_plugin
+        .generate_token(&session.token, service.adapter().as_ref())
+        .await
+        .unwrap();
+    assert!(!ott_res.token.is_empty());
+
+    // 2. Verify and atomically burn
+    let verified = ott_plugin
+        .verify_token(&ott_res.token, service.adapter().as_ref())
+        .await
+        .unwrap();
+    assert_eq!(verified.session.token, session.token);
+    assert_eq!(verified.user.id, user.id);
+
+    // 3. Second redemption MUST fail (atomic burn)
+    let re_verify = ott_plugin
+        .verify_token(&ott_res.token, service.adapter().as_ref())
+        .await;
+    assert!(re_verify.is_err());
+    assert_eq!(re_verify.err().unwrap().error_code(), "INVALID_TOKEN");
+
+    // 4. Hook on new session emits set-ott header
+    let mut session_ctx = EndpointHookContext {
+        path: "/sign-in/email".to_string(),
+        method: "POST".to_string(),
+        request_headers: Default::default(),
+        response_headers: Default::default(),
+        response_body: None,
+        new_session: Some((session, user)),
+    };
+
+    service
+        .plugins()
+        .run_after_endpoint(&mut session_ctx, &service)
+        .await
+        .unwrap();
+
+    let ott_header = session_ctx.response_headers.get("set-ott");
+    assert!(ott_header.is_some());
+    assert!(session_ctx
+        .response_headers
+        .get("access-control-expose-headers")
+        .unwrap()
+        .contains("set-ott"));
 }

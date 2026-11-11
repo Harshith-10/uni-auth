@@ -14,11 +14,17 @@ use crate::models::{
     AdminUpdateUserFields, CreateSessionInput, CreateUserInput, SessionRecord, UserRecord,
 };
 
+pub mod bearer;
 pub mod hooked_adapter;
+pub mod one_time_token;
 pub mod registry;
 pub mod totp;
 
+pub use bearer::{BearerConfig, BearerPlugin};
 pub use hooked_adapter::HookedAdapter;
+pub use one_time_token::{
+    OneTimeTokenConfig, OneTimeTokenPlugin, OneTimeTokenServiceExt, OttStoreTokenMode,
+};
 pub use registry::PluginRegistry;
 pub use totp::TotpValidator;
 
@@ -190,11 +196,11 @@ pub trait BetterAuthPlugin: Send + Sync + 'static {
         false
     }
 
-    fn on_before_endpoint(
-        &self,
-        _ctx: &mut EndpointHookContext,
-        _service: &crate::service::AuthService,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn on_before_endpoint<'a>(
+        &'a self,
+        _ctx: &'a mut EndpointHookContext,
+        _service: &'a crate::service::AuthService,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         Box::pin(async { Ok(()) })
     }
 
@@ -203,11 +209,11 @@ pub trait BetterAuthPlugin: Send + Sync + 'static {
         false
     }
 
-    fn on_after_endpoint(
-        &self,
-        _ctx: &mut EndpointHookContext,
-        _service: &crate::service::AuthService,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn on_after_endpoint<'a>(
+        &'a self,
+        _ctx: &'a mut EndpointHookContext,
+        _service: &'a crate::service::AuthService,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         Box::pin(async { Ok(()) })
     }
 

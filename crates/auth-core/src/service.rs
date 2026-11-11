@@ -1110,19 +1110,23 @@ impl AuthService {
             return Err(AuthError::SessionExpired);
         }
 
-        let token = crypto::generate_random_token(32);
-        let expires_at = OffsetDateTime::now_utc() + self.config.ott_expires_in;
+        if let Some(plugin) = self.get_plugin::<crate::plugin::OneTimeTokenPlugin>() {
+            plugin.generate_token(&session.token, &*self.adapter).await
+        } else {
+            let token = crypto::generate_random_token(32);
+            let expires_at = OffsetDateTime::now_utc() + self.config.ott_expires_in;
 
-        self.adapter
-            .create_verification(CreateVerificationInput {
-                id: None,
-                identifier: format!("one-time-token:{token}"),
-                value: session.token,
-                expires_at,
-            })
-            .await?;
+            self.adapter
+                .create_verification(CreateVerificationInput {
+                    id: None,
+                    identifier: format!("one-time-token:{token}"),
+                    value: session.token,
+                    expires_at,
+                })
+                .await?;
 
-        Ok(OneTimeTokenGenerateResponse { token })
+            Ok(OneTimeTokenGenerateResponse { token })
+        }
     }
 
     /// Atomically verifies and burns a one-time token, resolving to the attached session.
@@ -1130,12 +1134,15 @@ impl AuthService {
         &self,
         token: &str,
     ) -> Result<SessionAndUserResponse, AuthError> {
-        let identifier = format!("one-time-token:{token}");
-        let record = self
-            .adapter
-            .consume_verification(&identifier)
-            .await?
-            .ok_or(AuthError::InvalidToken)?;
+        if let Some(plugin) = self.get_plugin::<crate::plugin::OneTimeTokenPlugin>() {
+            plugin.verify_token(token, &*self.adapter).await
+        } else {
+            let identifier = format!("one-time-token:{token}");
+            let record = self
+                .adapter
+                .consume_verification(&identifier)
+                .await?
+                .ok_or(AuthError::InvalidToken)?;
 
         let session = self
             .adapter
@@ -1153,10 +1160,11 @@ impl AuthService {
             .await?
             .ok_or(AuthError::UserNotFound)?;
 
-        Ok(SessionAndUserResponse {
-            session: session.to_wire(),
-            user: user.to_wire(),
-        })
+            Ok(SessionAndUserResponse {
+                session: session.to_wire(),
+                user: user.to_wire(),
+            })
+        }
     }
 
     // ──────────────────────────────────────────────

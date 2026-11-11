@@ -60,11 +60,11 @@ impl BetterAuthPlugin for HeaderHookPlugin {
         path == "/ok"
     }
 
-    fn on_before_endpoint(
-        &self,
-        ctx: &mut EndpointHookContext,
-        _service: &AuthService,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn on_before_endpoint<'a>(
+        &'a self,
+        ctx: &'a mut EndpointHookContext,
+        _service: &'a AuthService,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         // Inject a request header before handler runs
         ctx.request_headers
             .insert("x-custom-req-tag".to_string(), "tagged-123".to_string());
@@ -75,11 +75,11 @@ impl BetterAuthPlugin for HeaderHookPlugin {
         path == "/ok"
     }
 
-    fn on_after_endpoint(
-        &self,
-        ctx: &mut EndpointHookContext,
-        _service: &AuthService,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn on_after_endpoint<'a>(
+        &'a self,
+        ctx: &'a mut EndpointHookContext,
+        _service: &'a AuthService,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         // Inject a custom response header
         ctx.response_headers
             .insert("x-plugin-processed".to_string(), "true".to_string());
