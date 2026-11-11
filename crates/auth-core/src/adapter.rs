@@ -289,7 +289,7 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 image: input.image,
                 created_at: now,
                 updated_at: now,
-                role: Some("user".to_string()),
+                role: Some(input.role.unwrap_or_else(|| "user".to_string())),
                 banned: false,
                 ban_reason: None,
                 ban_expires: None,

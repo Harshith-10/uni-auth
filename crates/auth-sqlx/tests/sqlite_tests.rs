@@ -24,6 +24,7 @@ async fn test_sqlite_adapter_direct_crud() {
             email: "sqlite@example.com".to_string(),
             image: Some("https://example.com/pic.png".to_string()),
             email_verified: false,
+            role: None,
         })
         .await
         .expect("Create user should succeed");
@@ -50,6 +51,7 @@ async fn test_sqlite_adapter_direct_crud() {
             email: "sqlite@example.com".to_string(),
             image: None,
             email_verified: false,
+            role: None,
         })
         .await;
     assert!(dup_err.is_err());
@@ -353,6 +355,7 @@ async fn test_sqlite_list_users_parameterized_query_builder() {
             email: "alice@example.com".to_string(),
             image: None,
             email_verified: true,
+            role: None,
         })
         .await
         .unwrap();
@@ -364,6 +367,7 @@ async fn test_sqlite_list_users_parameterized_query_builder() {
             email: "bob@example.com".to_string(),
             image: None,
             email_verified: false,
+            role: None,
         })
         .await
         .unwrap();
@@ -375,6 +379,7 @@ async fn test_sqlite_list_users_parameterized_query_builder() {
             email: "charlie@example.com".to_string(),
             image: None,
             email_verified: true,
+            role: None,
         })
         .await
         .unwrap();

@@ -516,6 +516,7 @@ async fn test_credential_account_with_distinct_account_id() {
             email: "migrated_cred@example.com".to_string(),
             image: None,
             email_verified: true,
+            role: None,
         })
         .await
         .unwrap();

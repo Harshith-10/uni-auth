@@ -1,0 +1,91 @@
+//! Plugin registry managing registered `BetterAuthPlugin` instances, endpoint hooks, and downcasting.
+
+use std::sync::Arc;
+
+use crate::error::AuthError;
+use crate::service::AuthService;
+use super::{BetterAuthPlugin, DatabaseHooks, EndpointHookContext, PluginMigration, PluginRateLimitRule};
+
+/// Thread-safe registry of `BetterAuthPlugin` extensions.
+#[derive(Default, Clone)]
+pub struct PluginRegistry {
+    plugins: Vec<Arc<dyn BetterAuthPlugin>>,
+}
+
+impl PluginRegistry {
+    /// Creates an empty plugin registry.
+    pub fn new() -> Self {
+        Self {
+            plugins: Vec::new(),
+        }
+    }
+
+    /// Registers a new `BetterAuthPlugin`.
+    pub fn register(&mut self, plugin: Arc<dyn BetterAuthPlugin>) {
+        self.plugins.push(plugin);
+    }
+
+    /// Returns a slice of all registered plugins.
+    pub fn plugins(&self) -> &[Arc<dyn BetterAuthPlugin>] {
+        &self.plugins
+    }
+
+    /// Finds and downcasts a registered plugin to its concrete type.
+    pub fn get<P: BetterAuthPlugin + 'static>(&self) -> Option<&P> {
+        self.plugins
+            .iter()
+            .find_map(|p| p.as_any().downcast_ref::<P>())
+    }
+
+    /// Collects all `DatabaseHooks` instances from registered plugins.
+    pub fn database_hooks(&self) -> Vec<Arc<dyn DatabaseHooks>> {
+        self.plugins
+            .iter()
+            .filter_map(|p| p.database_hooks())
+            .collect()
+    }
+
+    /// Collects declarative migrations from registered plugins.
+    pub fn migrations(&self) -> Vec<PluginMigration> {
+        self.plugins
+            .iter()
+            .filter_map(|p| p.migration())
+            .collect()
+    }
+
+    /// Collects rate limit rules from registered plugins.
+    pub fn rate_limits(&self) -> Vec<PluginRateLimitRule> {
+        self.plugins
+            .iter()
+            .flat_map(|p| p.rate_limits())
+            .collect()
+    }
+
+    /// Executes `on_before_endpoint` hooks matching the given endpoint path.
+    pub async fn run_before_endpoint(
+        &self,
+        ctx: &mut EndpointHookContext,
+        service: &AuthService,
+    ) -> Result<(), AuthError> {
+        for plugin in &self.plugins {
+            if plugin.matches_before(&ctx.path) {
+                plugin.on_before_endpoint(ctx, service).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Executes `on_after_endpoint` hooks matching the given endpoint path.
+    pub async fn run_after_endpoint(
+        &self,
+        ctx: &mut EndpointHookContext,
+        service: &AuthService,
+    ) -> Result<(), AuthError> {
+        for plugin in &self.plugins {
+            if plugin.matches_after(&ctx.path) {
+                plugin.on_after_endpoint(ctx, service).await?;
+            }
+        }
+        Ok(())
+    }
+}

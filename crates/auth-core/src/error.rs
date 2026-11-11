@@ -84,7 +84,7 @@ pub enum AuthError {
     },
 
     #[error("Database adapter error: {0}")]
-    Adapter(#[from] AdapterError),
+    Adapter(AdapterError),
 
     #[error("Crypto error: {0}")]
     Crypto(String),
@@ -197,4 +197,22 @@ pub enum AdapterError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("{0}")]
+    Auth(Box<AuthError>),
+}
+
+impl From<AdapterError> for AuthError {
+    fn from(err: AdapterError) -> Self {
+        match err {
+            AdapterError::Auth(auth_err) => *auth_err,
+            other => AuthError::Adapter(other),
+        }
+    }
+}
+
+impl From<AuthError> for AdapterError {
+    fn from(err: AuthError) -> Self {
+        AdapterError::Auth(Box::new(err))
+    }
 }

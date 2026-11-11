@@ -1,36 +1,10 @@
-//! Modular plugin architecture for extending `AuthService` with Better Auth plugins
-//! (such as Two-Factor TOTP, API Keys, or Organizations).
+//! RFC 6238 Time-Based One-Time Password (TOTP) helper for the Better Auth `two-factor` plugin.
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use time::OffsetDateTime;
 
-use auth_proto::{SessionWire, UserWire};
-
-use crate::adapter::BoxFuture;
-use crate::error::AuthError;
-
 type HmacSha256 = Hmac<Sha256>;
-
-/// Object-safe plugin trait for hooking into `AuthService` authentication flows.
-pub trait AuthPlugin: Send + Sync {
-    /// Unique plugin identifier (e.g. `"two-factor"`, `"api-key"`, `"organization"`).
-    fn id(&self) -> &'static str;
-
-    /// Invoked before an email sign-in completes. Returning `Err(AuthError)` aborts sign-in.
-    fn on_before_sign_in(&self, _user: &UserWire) -> BoxFuture<'static, Result<(), AuthError>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    /// Invoked after a session is issued.
-    fn on_after_session_issued(
-        &self,
-        _session: &SessionWire,
-        _user: &UserWire,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
 
 /// RFC 6238 Time-Based One-Time Password (TOTP) helper for the Better Auth `two-factor` plugin.
 #[derive(Debug, Clone)]

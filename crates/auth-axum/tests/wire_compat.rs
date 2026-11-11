@@ -328,6 +328,7 @@ async fn test_oauth_callback_redirect_hygiene_and_unverified_email_protection() 
             email: "user_unverified_victim@example.com".to_string(),
             image: None,
             email_verified: true,
+            role: None,
         })
         .await
         .unwrap();

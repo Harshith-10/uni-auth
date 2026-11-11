@@ -12,6 +12,7 @@ pub mod cors;
 pub mod error;
 pub mod extract;
 pub mod middleware;
+pub mod plugin;
 pub mod routes;
 pub mod state;
 
@@ -21,5 +22,6 @@ pub use extract::{
     extract_request_meta, extract_token_from_headers, CurrentSession, FreshSession, OptionalSession,
 };
 pub use middleware::verify_trusted_origin;
-pub use routes::{auth_router, auth_routes};
+pub use plugin::{check_endpoint_conflicts, AxumAuthPlugin, RouteDescriptor};
+pub use routes::{auth_router, auth_routes, auth_routes_with_plugins};
 pub use state::{AuthState, OAuthProviderConfig};

@@ -106,7 +106,27 @@ where
         .route("/admin/has-permission", post(admin::user_has_permission))
 }
 
-/// Constructs a self-contained auth router with `AuthState` applied (state: `()`).
+/// Constructs an `auth_routes` sub-router merged with any registered `AxumAuthPlugin` routers.
+pub fn auth_routes_with_plugins(state: &AuthState) -> Router<AuthState> {
+    let mut router = auth_routes::<AuthState>();
+    if !state.axum_plugins.is_empty() {
+        if let Err(conflict) = crate::plugin::check_endpoint_conflicts(&state.axum_plugins) {
+            tracing::warn!("Endpoint conflict detected in Axum plugins: {}", conflict);
+        }
+        for plugin in state.axum_plugins.iter() {
+            router = router.merge(plugin.router());
+        }
+    }
+    router
+}
+
+/// Constructs a self-contained auth router with `AuthState` applied, including plugins and endpoint hooks (state: `()`).
 pub fn auth_router(state: AuthState) -> Router {
-    auth_routes().with_state(state)
+    let router = auth_routes_with_plugins(&state);
+    router
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::plugin::endpoint_hooks_middleware,
+        ))
+        .with_state(state)
 }

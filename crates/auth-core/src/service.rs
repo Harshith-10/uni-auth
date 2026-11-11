@@ -28,7 +28,7 @@ use crate::models::{
     CreateSessionInput, CreateUserInput, CreateVerificationInput, RequestMeta, SessionRecord,
     UserRecord,
 };
-use crate::plugin::AuthPlugin;
+use crate::plugin::{AuthPlugin, BetterAuthPlugin, HookedAdapter, PluginRegistry};
 
 /// Configuration options for `AuthService`.
 #[derive(Clone, Debug)]
@@ -94,11 +94,13 @@ impl Default for AuthConfig {
 pub struct AuthService {
     config: AuthConfig,
     admin_config: AdminConfig,
+    raw_adapter: Arc<dyn AuthAdapter>,
     adapter: Arc<dyn AuthAdapter>,
     email_sender: Arc<dyn EmailSender>,
     hooks: Arc<dyn AuthHooks>,
     rate_limiter: Option<Arc<SlidingWindowRateLimiter>>,
-    plugins: Arc<Vec<Arc<dyn AuthPlugin>>>,
+    plugins: PluginRegistry,
+    legacy_plugins: Arc<Vec<Arc<dyn AuthPlugin>>>,
     auto_sign_in_after_verification: bool,
     session_update_age: Duration,
     session_fresh_age: Duration,
@@ -106,14 +108,17 @@ pub struct AuthService {
 
 impl AuthService {
     pub fn new(config: AuthConfig, adapter: Arc<dyn AuthAdapter>) -> Self {
+        let raw_adapter = adapter.clone();
         Self {
             config,
             admin_config: AdminConfig::default(),
+            raw_adapter,
             adapter,
             email_sender: Arc::new(NoopEmailSender),
             hooks: Arc::new(NoopAuthHooks),
             rate_limiter: None,
-            plugins: Arc::new(Vec::new()),
+            plugins: PluginRegistry::new(),
+            legacy_plugins: Arc::new(Vec::new()),
             auto_sign_in_after_verification: false,
             session_update_age: Duration::hours(24),
             session_fresh_age: Duration::hours(24),
@@ -144,16 +149,50 @@ impl AuthService {
         self
     }
 
-    /// Registers a modular `AuthPlugin` with `AuthService`.
-    pub fn with_plugin(mut self, plugin: Arc<dyn AuthPlugin>) -> Self {
-        let mut list = (*self.plugins).clone();
-        list.push(plugin);
-        self.plugins = Arc::new(list);
+    /// Registers a modular `BetterAuthPlugin` with `AuthService`.
+    pub fn with_plugin<P: BetterAuthPlugin + 'static>(mut self, plugin: P) -> Self {
+        self.plugins.register(Arc::new(plugin));
+        self.rebuild_hooked_adapter();
         self
     }
 
-    pub fn plugins(&self) -> &[Arc<dyn AuthPlugin>] {
+    /// Registers an `Arc<dyn BetterAuthPlugin>` with `AuthService`.
+    pub fn with_plugin_arc(mut self, plugin: Arc<dyn BetterAuthPlugin>) -> Self {
+        self.plugins.register(plugin);
+        self.rebuild_hooked_adapter();
+        self
+    }
+
+    /// Accessor for the registered `PluginRegistry`.
+    pub fn plugins(&self) -> &PluginRegistry {
         &self.plugins
+    }
+
+    /// Retrieves and downcasts a registered `BetterAuthPlugin` by type.
+    pub fn get_plugin<P: BetterAuthPlugin + 'static>(&self) -> Option<&P> {
+        self.plugins.get::<P>()
+    }
+
+    /// Registers a legacy `AuthPlugin` with `AuthService`.
+    pub fn with_legacy_plugin(mut self, plugin: Arc<dyn AuthPlugin>) -> Self {
+        let mut list = (*self.legacy_plugins).clone();
+        list.push(plugin);
+        self.legacy_plugins = Arc::new(list);
+        self
+    }
+
+    /// Accessor for legacy plugins.
+    pub fn legacy_plugins(&self) -> &[Arc<dyn AuthPlugin>] {
+        &self.legacy_plugins
+    }
+
+    fn rebuild_hooked_adapter(&mut self) {
+        let db_hooks = self.plugins.database_hooks();
+        if db_hooks.is_empty() {
+            self.adapter = self.raw_adapter.clone();
+        } else {
+            self.adapter = Arc::new(HookedAdapter::new(self.raw_adapter.clone(), db_hooks));
+        }
     }
 
     /// Configures whether verifying an email address automatically issues a session token.
@@ -285,7 +324,7 @@ impl AuthService {
 
         let user_wire = user.to_wire();
         if run_before_sign_in {
-            for plugin in self.plugins.iter() {
+            for plugin in self.legacy_plugins.iter() {
                 plugin.on_before_sign_in(&user_wire).await?;
             }
         }
@@ -307,7 +346,7 @@ impl AuthService {
 
         let session_wire = session.to_wire();
         self.hooks.on_session_created(&session_wire, &user_wire).await;
-        for plugin in self.plugins.iter() {
+        for plugin in self.legacy_plugins.iter() {
             plugin
                 .on_after_session_issued(&session_wire, &user_wire)
                 .await?;
@@ -382,6 +421,7 @@ impl AuthService {
                 email: email.clone(),
                 image: req.image,
                 email_verified: false,
+                role: None,
             })
             .await?;
 
@@ -785,7 +825,7 @@ impl AuthService {
                     })
                     .await?;
             }
-            Err(e) => return Err(AuthError::Adapter(e)),
+            Err(e) => return Err(AuthError::from(e)),
         }
 
         self.adapter.delete_sessions_by_user_id(&user_id).await?;
@@ -901,7 +941,7 @@ impl AuthService {
             .await
             .map_err(|e| match e {
                 AdapterError::NotFound => AuthError::UserNotFound,
-                other => AuthError::Adapter(other),
+                other => AuthError::from(other),
             })?;
 
         Ok(UpdateUserResponse {
@@ -1259,7 +1299,7 @@ impl AuthService {
             .await
             .map_err(|e| match e {
                 AdapterError::NotFound => AuthError::UserNotFound,
-                other => AuthError::Adapter(other),
+                other => AuthError::from(other),
             })?;
 
         Ok(AdminUserResponse {
@@ -1388,6 +1428,7 @@ impl AuthService {
                 email: email.clone(),
                 image,
                 email_verified,
+                role: requested_role.as_ref().map(|r| r.to_csv()),
             })
             .await?;
 
@@ -1581,7 +1622,7 @@ impl AuthService {
             .await
             .map_err(|e| match e {
                 AdapterError::NotFound => AuthError::UserNotFound,
-                other => AuthError::Adapter(other),
+                other => AuthError::from(other),
             })?;
 
         if fields.banned == Some(true) {
@@ -1732,7 +1773,7 @@ impl AuthService {
             .await
             .map_err(|e| match e {
                 AdapterError::NotFound => AuthError::UserNotFound,
-                other => AuthError::Adapter(other),
+                other => AuthError::from(other),
             })?;
 
         Ok(AdminUserResponse {
@@ -2254,6 +2295,7 @@ impl AuthService {
                             email: profile.email.clone(),
                             image: profile.image,
                             email_verified: profile.email_verified,
+                            role: None,
                         })
                         .await?;
                     self.notify_user_created(&created.to_wire()).await;

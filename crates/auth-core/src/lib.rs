@@ -32,5 +32,8 @@ pub use models::*;
 pub use oauth::{
     OAuthHttpClient, OAuthProfileResult, OAuthProviderConfig, OAuthStateData, ReqwestOAuthClient,
 };
-pub use plugin::{AuthPlugin, TotpValidator};
+pub use plugin::{
+    AuthPlugin, BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookOutcome, HookedAdapter,
+    PluginMigration, PluginRateLimitRule, PluginRegistry, TotpValidator, UserUpdatePatch,
+};
 pub use service::{AuthConfig, AuthService, OAuthCallbackResult};

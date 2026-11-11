@@ -312,7 +312,7 @@ impl AuthAdapter for PostgresAuthAdapter {
             let id = input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
             let email = input.email.to_lowercase();
             let now = OffsetDateTime::now_utc();
-            let default_role = "user".to_string();
+            let role = input.role.unwrap_or_else(|| "user".to_string());
 
             let res = sqlx::query(
                 r#"
@@ -325,7 +325,7 @@ impl AuthAdapter for PostgresAuthAdapter {
             .bind(&email)
             .bind(input.email_verified)
             .bind(&input.image)
-            .bind(&default_role)
+            .bind(&role)
             .bind(now)
             .bind(now)
             .execute(&pool)
@@ -340,7 +340,7 @@ impl AuthAdapter for PostgresAuthAdapter {
                     image: input.image,
                     created_at: now,
                     updated_at: now,
-                    role: Some(default_role),
+                    role: Some(role),
                     banned: false,
                     ban_reason: None,
                     ban_expires: None,

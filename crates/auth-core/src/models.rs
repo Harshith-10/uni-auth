@@ -151,6 +151,7 @@ pub struct CreateUserInput {
     pub email: String,
     pub image: Option<String>,
     pub email_verified: bool,
+    pub role: Option<String>,
 }
 
 /// Partial update payload used by Admin plugin operations (`set-role`, `ban-user`, `unban-user`, `update-user`).

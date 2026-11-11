@@ -375,7 +375,7 @@ impl AuthAdapter for SqliteAuthAdapter {
             let now = OffsetDateTime::now_utc();
             let now_str = format_dt(now);
             let verified_int: i64 = if input.email_verified { 1 } else { 0 };
-            let default_role = "user".to_string();
+            let role = input.role.unwrap_or_else(|| "user".to_string());
 
             let res = sqlx::query(
                 r#"
@@ -388,7 +388,7 @@ impl AuthAdapter for SqliteAuthAdapter {
             .bind(&email)
             .bind(verified_int)
             .bind(&input.image)
-            .bind(&default_role)
+            .bind(&role)
             .bind(&now_str)
             .bind(&now_str)
             .execute(&pool)
@@ -403,7 +403,7 @@ impl AuthAdapter for SqliteAuthAdapter {
                     image: input.image,
                     created_at: now,
                     updated_at: now,
-                    role: Some(default_role),
+                    role: Some(role),
                     banned: false,
                     ban_reason: None,
                     ban_expires: None,

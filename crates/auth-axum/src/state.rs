@@ -16,6 +16,7 @@ pub struct AuthState {
     pub oauth_providers: Arc<HashMap<String, OAuthProviderConfig>>,
     pub oauth_http_client: Arc<dyn OAuthHttpClient>,
     pub trusted_origins: Arc<Vec<String>>,
+    pub axum_plugins: Arc<Vec<Arc<dyn crate::plugin::AxumAuthPlugin>>>,
 }
 
 impl AuthState {
@@ -28,7 +29,15 @@ impl AuthState {
             oauth_providers: Arc::new(HashMap::new()),
             oauth_http_client: Arc::new(ReqwestOAuthClient::new()),
             trusted_origins: Arc::new(Vec::new()),
+            axum_plugins: Arc::new(Vec::new()),
         }
+    }
+
+    pub fn with_plugin(mut self, plugin: Arc<dyn crate::plugin::AxumAuthPlugin>) -> Self {
+        let mut plugins = (*self.axum_plugins).clone();
+        plugins.push(plugin);
+        self.axum_plugins = Arc::new(plugins);
+        self
     }
 
     pub fn with_oauth_http_client(mut self, client: Arc<dyn OAuthHttpClient>) -> Self {
