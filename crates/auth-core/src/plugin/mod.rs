@@ -14,12 +14,14 @@ use crate::models::{
     AdminUpdateUserFields, CreateSessionInput, CreateUserInput, SessionRecord, UserRecord,
 };
 
+pub mod admin;
 pub mod bearer;
 pub mod hooked_adapter;
 pub mod one_time_token;
 pub mod registry;
 pub mod totp;
 
+pub use admin::{AdminPlugin, AdminService, AdminServiceExt};
 pub use bearer::{BearerConfig, BearerPlugin};
 pub use hooked_adapter::HookedAdapter;
 pub use one_time_token::{
@@ -63,86 +65,86 @@ pub enum UserUpdatePatch {
 pub trait DatabaseHooks: Send + Sync {
     // ── User Hooks ──
 
-    fn before_create_user(
-        &self,
+    fn before_create_user<'a>(
+        &'a self,
         input: CreateUserInput,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<HookOutcome<CreateUserInput>, AuthError>> {
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<HookOutcome<CreateUserInput>, AuthError>> {
         Box::pin(async move { Ok(HookOutcome::Continue(input)) })
     }
 
-    fn after_create_user(
-        &self,
-        _user: &UserRecord,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn after_create_user<'a>(
+        &'a self,
+        _user: &'a UserRecord,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn before_update_user(
-        &self,
-        _user_id: &str,
+    fn before_update_user<'a>(
+        &'a self,
+        _user_id: &'a str,
         patch: UserUpdatePatch,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<HookOutcome<UserUpdatePatch>, AuthError>> {
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<HookOutcome<UserUpdatePatch>, AuthError>> {
         Box::pin(async move { Ok(HookOutcome::Continue(patch)) })
     }
 
-    fn after_update_user(
-        &self,
-        _user: &UserRecord,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn after_update_user<'a>(
+        &'a self,
+        _user: &'a UserRecord,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn before_delete_user(
-        &self,
-        _user: &UserRecord,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<bool, AuthError>> {
+    fn before_delete_user<'a>(
+        &'a self,
+        _user: &'a UserRecord,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<bool, AuthError>> {
         Box::pin(async { Ok(true) })
     }
 
-    fn after_delete_user(
-        &self,
-        _user_id: &str,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn after_delete_user<'a>(
+        &'a self,
+        _user_id: &'a str,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         Box::pin(async { Ok(()) })
     }
 
     // ── Session Hooks ──
 
-    fn before_create_session(
-        &self,
+    fn before_create_session<'a>(
+        &'a self,
         input: CreateSessionInput,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<HookOutcome<CreateSessionInput>, AuthError>> {
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<HookOutcome<CreateSessionInput>, AuthError>> {
         Box::pin(async move { Ok(HookOutcome::Continue(input)) })
     }
 
-    fn after_create_session(
-        &self,
-        _session: &SessionRecord,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn after_create_session<'a>(
+        &'a self,
+        _session: &'a SessionRecord,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn before_delete_session(
-        &self,
-        _token: &str,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<bool, AuthError>> {
+    fn before_delete_session<'a>(
+        &'a self,
+        _token: &'a str,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<bool, AuthError>> {
         Box::pin(async { Ok(true) })
     }
 
-    fn after_delete_session(
-        &self,
-        _token: &str,
-        _adapter: &dyn AuthAdapter,
-    ) -> BoxFuture<'static, Result<(), AuthError>> {
+    fn after_delete_session<'a>(
+        &'a self,
+        _token: &'a str,
+        _adapter: &'a dyn AuthAdapter,
+    ) -> BoxFuture<'a, Result<(), AuthError>> {
         Box::pin(async { Ok(()) })
     }
 }

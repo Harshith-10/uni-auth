@@ -4,6 +4,15 @@
 
 use std::collections::{HashMap, HashSet};
 use time::Duration;
+use crate::error::AuthError;
+
+/// Logical connector used for evaluating multi-permission requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Connector {
+    #[default]
+    And,
+    Or,
+}
 
 /// Resource-to-actions permission map for a single role.
 #[derive(Debug, Clone, Default)]
@@ -30,17 +39,45 @@ impl RolePermissions {
 
     /// Returns `true` if this role grants all requested actions on every requested resource.
     pub fn authorize(&self, requested: &HashMap<String, Vec<String>>) -> bool {
-        for (resource, actions) in requested {
-            let Some(allowed) = self.statements.get(resource) else {
-                return false;
-            };
-            for action in actions {
-                if !allowed.contains(action) {
-                    return false;
+        self.authorize_with_connector(requested, Connector::And)
+    }
+
+    /// Evaluates requested resource-action permissions against this role using `connector` (`And` or `Or`).
+    pub fn authorize_with_connector(
+        &self,
+        requested: &HashMap<String, Vec<String>>,
+        connector: Connector,
+    ) -> bool {
+        if requested.is_empty() {
+            return true;
+        }
+        match connector {
+            Connector::And => {
+                for (resource, actions) in requested {
+                    let Some(allowed) = self.statements.get(resource) else {
+                        return false;
+                    };
+                    for action in actions {
+                        if !allowed.contains(action) {
+                            return false;
+                        }
+                    }
                 }
+                true
+            }
+            Connector::Or => {
+                for (resource, actions) in requested {
+                    if let Some(allowed) = self.statements.get(resource) {
+                        for action in actions {
+                            if allowed.contains(action) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
             }
         }
-        true
     }
 }
 
@@ -100,6 +137,10 @@ impl AccessControl {
     pub fn get_role(&self, name: &str) -> Option<&RolePermissions> {
         self.roles.get(name)
     }
+
+    pub fn roles(&self) -> &HashMap<String, RolePermissions> {
+        &self.roles
+    }
 }
 
 /// Configuration for the Better Auth `admin` plugin.
@@ -152,6 +193,20 @@ impl Default for AdminConfig {
 }
 
 impl AdminConfig {
+    /// Validates that all configured `admin_roles` exist in `ac.roles` (case-insensitive).
+    /// Parity with Better Auth's `admin.ts` lines 54-69.
+    pub fn validate(&self) -> Result<(), AuthError> {
+        for admin_role in &self.admin_roles {
+            let exists = self.ac.roles().keys().any(|r| r.eq_ignore_ascii_case(admin_role));
+            if !exists {
+                return Err(AuthError::Internal(format!(
+                    "AdminConfig validation error: admin_role '{admin_role}' is not defined in AccessControl roles"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluates whether a user (by `user_id` and/or comma-separated `role_csv`) has all requested permissions.
     ///
     /// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/has-permission.ts`
@@ -160,6 +215,17 @@ impl AdminConfig {
         user_id: Option<&str>,
         role_csv: Option<&str>,
         permissions: &HashMap<String, Vec<String>>,
+    ) -> bool {
+        self.has_permission_map_with_connector(user_id, role_csv, permissions, Connector::And)
+    }
+
+    /// Evaluates whether a user has requested permissions using the specified `connector` (`And` or `Or`).
+    pub fn has_permission_map_with_connector(
+        &self,
+        user_id: Option<&str>,
+        role_csv: Option<&str>,
+        permissions: &HashMap<String, Vec<String>>,
+        connector: Connector,
     ) -> bool {
         if let Some(uid) = user_id {
             if self.admin_user_ids.iter().any(|id| id == uid) {
@@ -172,7 +238,7 @@ impl AdminConfig {
         let roles_str = role_csv.unwrap_or(&self.default_role);
         for role_name in roles_str.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             if let Some(role_def) = self.ac.get_role(role_name) {
-                if role_def.authorize(permissions) {
+                if role_def.authorize_with_connector(permissions, connector) {
                     return true;
                 }
             }

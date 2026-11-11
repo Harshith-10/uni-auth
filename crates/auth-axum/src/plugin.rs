@@ -9,7 +9,7 @@ use axum::response::Response;
 use axum::Router;
 
 use auth_core::plugin::EndpointHookContext;
-use auth_core::{BearerPlugin, OneTimeTokenPlugin};
+use auth_core::{AdminPlugin, BearerPlugin, OneTimeTokenPlugin};
 
 use crate::state::AuthState;
 
@@ -164,5 +164,95 @@ impl AxumAuthPlugin for BearerPlugin {
 
     fn router(&self) -> Router<AuthState> {
         Router::new()
+    }
+}
+
+impl AxumAuthPlugin for AdminPlugin {
+    fn plugin_id(&self) -> &'static str {
+        "admin"
+    }
+
+    fn declared_routes(&self) -> Vec<RouteDescriptor> {
+        vec![
+            RouteDescriptor::new("/admin/set-role", &["POST"]),
+            RouteDescriptor::new("/admin/get-user", &["GET"]),
+            RouteDescriptor::new("/admin/create-user", &["POST"]),
+            RouteDescriptor::new("/admin/update-user", &["POST"]),
+            RouteDescriptor::new("/admin/list-users", &["GET"]),
+            RouteDescriptor::new("/admin/list-user-sessions", &["POST"]),
+            RouteDescriptor::new("/admin/ban-user", &["POST"]),
+            RouteDescriptor::new("/admin/unban-user", &["POST"]),
+            RouteDescriptor::new("/admin/impersonate-user", &["POST"]),
+            RouteDescriptor::new("/admin/stop-impersonating", &["POST"]),
+            RouteDescriptor::new("/admin/revoke-user-session", &["POST"]),
+            RouteDescriptor::new("/admin/revoke-user-sessions", &["POST"]),
+            RouteDescriptor::new("/admin/remove-user", &["POST"]),
+            RouteDescriptor::new("/admin/set-user-password", &["POST"]),
+            RouteDescriptor::new("/admin/has-permission", &["POST"]),
+        ]
+    }
+
+    fn router(&self) -> Router<AuthState> {
+        Router::new()
+            .route(
+                "/admin/set-role",
+                axum::routing::post(crate::routes::admin::set_role),
+            )
+            .route(
+                "/admin/get-user",
+                axum::routing::get(crate::routes::admin::get_user),
+            )
+            .route(
+                "/admin/create-user",
+                axum::routing::post(crate::routes::admin::create_user),
+            )
+            .route(
+                "/admin/update-user",
+                axum::routing::post(crate::routes::admin::admin_update_user),
+            )
+            .route(
+                "/admin/list-users",
+                axum::routing::get(crate::routes::admin::list_users),
+            )
+            .route(
+                "/admin/list-user-sessions",
+                axum::routing::post(crate::routes::admin::list_user_sessions),
+            )
+            .route(
+                "/admin/ban-user",
+                axum::routing::post(crate::routes::admin::ban_user),
+            )
+            .route(
+                "/admin/unban-user",
+                axum::routing::post(crate::routes::admin::unban_user),
+            )
+            .route(
+                "/admin/impersonate-user",
+                axum::routing::post(crate::routes::admin::impersonate_user),
+            )
+            .route(
+                "/admin/stop-impersonating",
+                axum::routing::post(crate::routes::admin::stop_impersonating),
+            )
+            .route(
+                "/admin/revoke-user-session",
+                axum::routing::post(crate::routes::admin::revoke_user_session),
+            )
+            .route(
+                "/admin/revoke-user-sessions",
+                axum::routing::post(crate::routes::admin::revoke_user_sessions),
+            )
+            .route(
+                "/admin/remove-user",
+                axum::routing::post(crate::routes::admin::remove_user),
+            )
+            .route(
+                "/admin/set-user-password",
+                axum::routing::post(crate::routes::admin::set_user_password),
+            )
+            .route(
+                "/admin/has-permission",
+                axum::routing::post(crate::routes::admin::user_has_permission),
+            )
     }
 }

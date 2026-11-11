@@ -14,7 +14,7 @@ use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use auth_axum::{
-    auth_routes, build_auth_cors_layer, AuthState, CurrentSession, OAuthProviderConfig,
+    auth_routes_with_plugins, build_auth_cors_layer, AuthState, CurrentSession, OAuthProviderConfig,
 };
 use auth_core::{AdminUpdateUserFields, AuthConfig, AuthService};
 use auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
@@ -293,7 +293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/api/saas/me", get(saas_me))
-        .nest("/api/auth", auth_routes())
+        .nest("/api/auth", auth_routes_with_plugins(&auth_state))
         .layer(cors)
         .with_state(auth_state);
 

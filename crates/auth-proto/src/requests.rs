@@ -506,4 +506,6 @@ pub struct AdminHasPermissionRequest {
     pub permissions: Option<HashMap<String, Vec<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<HashMap<String, Vec<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector: Option<String>,
 }

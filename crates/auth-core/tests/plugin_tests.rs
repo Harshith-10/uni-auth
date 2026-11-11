@@ -349,8 +349,7 @@ fn test_plugin_downcasting_and_metadata() {
 
     // Check migrations and rate limits collected
     let migrations = service.plugins().migrations();
-    assert_eq!(migrations.len(), 1);
-    assert_eq!(migrations[0].plugin_id, "sample-plugin");
+    assert!(migrations.iter().any(|m| m.plugin_id == "sample-plugin"));
 
     let rate_limits = service.plugins().rate_limits();
     assert_eq!(rate_limits.len(), 1);
@@ -411,7 +410,7 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
         .on_before_endpoint(&mut strict_ctx, &service)
         .await
         .unwrap();
-    assert!(strict_ctx.request_headers.get("cookie").is_none());
+    assert!(!strict_ctx.request_headers.contains_key("cookie"));
 
     // 3. After endpoint hook: Set-Cookie in response emits set-auth-token and exposes header
     let mut after_ctx = EndpointHookContext {
@@ -462,7 +461,7 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
         .run_after_endpoint(&mut clear_ctx, &service)
         .await
         .unwrap();
-    assert!(clear_ctx.response_headers.get("set-auth-token").is_none());
+    assert!(!clear_ctx.response_headers.contains_key("set-auth-token"));
 }
 
 #[tokio::test]

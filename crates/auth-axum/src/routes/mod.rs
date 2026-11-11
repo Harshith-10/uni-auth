@@ -76,44 +76,25 @@ where
         .route("/callback/{provider}", get(social::oauth_callback))
         .route("/list-accounts", get(social::list_accounts))
         .route("/unlink-account", post(social::unlink_account))
-        // Admin Plugin
-        .route("/admin/set-role", post(admin::set_role))
-        .route("/admin/get-user", get(admin::get_user))
-        .route("/admin/create-user", post(admin::create_user))
-        .route("/admin/update-user", post(admin::admin_update_user))
-        .route("/admin/list-users", get(admin::list_users))
-        .route(
-            "/admin/list-user-sessions",
-            post(admin::list_user_sessions),
-        )
-        .route("/admin/ban-user", post(admin::ban_user))
-        .route("/admin/unban-user", post(admin::unban_user))
-        .route("/admin/impersonate-user", post(admin::impersonate_user))
-        .route(
-            "/admin/stop-impersonating",
-            post(admin::stop_impersonating),
-        )
-        .route(
-            "/admin/revoke-user-session",
-            post(admin::revoke_user_session),
-        )
-        .route(
-            "/admin/revoke-user-sessions",
-            post(admin::revoke_user_sessions),
-        )
-        .route("/admin/remove-user", post(admin::remove_user))
-        .route("/admin/set-user-password", post(admin::set_user_password))
-        .route("/admin/has-permission", post(admin::user_has_permission))
 }
 
 /// Constructs an `auth_routes` sub-router merged with any registered `AxumAuthPlugin` routers.
 pub fn auth_routes_with_plugins(state: &AuthState) -> Router<AuthState> {
     let mut router = auth_routes::<AuthState>();
-    if !state.axum_plugins.is_empty() {
-        if let Err(conflict) = crate::plugin::check_endpoint_conflicts(&state.axum_plugins) {
+
+    // Dynamically mount AdminPlugin router if registered on AuthService and not already in axum_plugins
+    let mut plugins: Vec<std::sync::Arc<dyn crate::plugin::AxumAuthPlugin>> = (*state.axum_plugins).clone();
+    if let Some(admin_plugin) = state.service.get_plugin::<auth_core::AdminPlugin>() {
+        if !plugins.iter().any(|p| p.plugin_id() == "admin") {
+            plugins.push(std::sync::Arc::new(admin_plugin.clone()));
+        }
+    }
+
+    if !plugins.is_empty() {
+        if let Err(conflict) = crate::plugin::check_endpoint_conflicts(&plugins) {
             tracing::warn!("Endpoint conflict detected in Axum plugins: {}", conflict);
         }
-        for plugin in state.axum_plugins.iter() {
+        for plugin in plugins.iter() {
             router = router.merge(plugin.router());
         }
     }

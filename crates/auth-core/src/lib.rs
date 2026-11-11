@@ -21,7 +21,7 @@ pub mod oauth;
 pub mod plugin;
 pub mod service;
 
-pub use access::{AccessControl, AdminConfig, RolePermissions};
+pub use access::{AccessControl, AdminConfig, Connector, RolePermissions};
 pub use adapter::{AuthAdapter, InMemoryAuthAdapter};
 pub use email::{EmailSender, MockEmailSender, NoopEmailSender};
 pub use error::{AdapterError, AuthError};
@@ -33,9 +33,9 @@ pub use oauth::{
     OAuthHttpClient, OAuthProfileResult, OAuthProviderConfig, OAuthStateData, ReqwestOAuthClient,
 };
 pub use plugin::{
-    AuthPlugin, BearerConfig, BearerPlugin, BetterAuthPlugin, DatabaseHooks, EndpointHookContext,
-    HookOutcome, HookedAdapter, OneTimeTokenConfig, OneTimeTokenPlugin, OneTimeTokenServiceExt,
-    OttStoreTokenMode, PluginMigration, PluginRateLimitRule, PluginRegistry, TotpValidator,
-    UserUpdatePatch,
+    AdminPlugin, AdminService, AdminServiceExt, AuthPlugin, BearerConfig, BearerPlugin,
+    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookOutcome, HookedAdapter,
+    OneTimeTokenConfig, OneTimeTokenPlugin, OneTimeTokenServiceExt, OttStoreTokenMode,
+    PluginMigration, PluginRateLimitRule, PluginRegistry, TotpValidator, UserUpdatePatch,
 };
 pub use service::{AuthConfig, AuthService, OAuthCallbackResult};
