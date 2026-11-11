@@ -1,13 +1,13 @@
-use axum::extract::State;
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 
-use auth_proto::{SignInEmailRequest, SignOutRequest, SignUpEmailRequest};
 use crate::error_to_response;
 use crate::extract::{extract_request_meta, extract_token_from_headers};
 use crate::middleware::verify_trusted_origin;
 use crate::state::AuthState;
+use auth_proto::{SignInEmailRequest, SignOutRequest, SignUpEmailRequest};
 
 pub async fn sign_up_email(
     State(state): State<AuthState>,

@@ -232,10 +232,8 @@ pub trait AuthAdapter: Send + Sync {
         &self,
         identifier: &str,
     ) -> BoxFuture<'static, Result<Option<VerificationRecord>, AdapterError>>;
-    fn delete_verification(
-        &self,
-        identifier: &str,
-    ) -> BoxFuture<'static, Result<(), AdapterError>>;
+    fn delete_verification(&self, identifier: &str)
+    -> BoxFuture<'static, Result<(), AdapterError>>;
     fn delete_expired_verifications(&self) -> BoxFuture<'static, Result<usize, AdapterError>>;
 }
 
@@ -271,7 +269,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
     ) -> BoxFuture<'static, Result<UserRecord, AdapterError>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let normalized_email = input.email.to_lowercase();
             if s.email_to_id.contains_key(&normalized_email) {
                 return Err(AdapterError::UniqueViolation(format!(
@@ -308,7 +308,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let id = id.to_string();
         Box::pin(async move {
-            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let s = store
+                .read()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             Ok(s.users.get(&id).cloned())
         })
     }
@@ -320,7 +322,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let email = email.to_lowercase();
         Box::pin(async move {
-            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let s = store
+                .read()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             if let Some(id) = s.email_to_id.get(&email) {
                 Ok(s.users.get(id).cloned())
             } else {
@@ -337,7 +341,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let id = id.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             if let Some(user) = s.users.get_mut(&id) {
                 user.email_verified = verified;
                 user.updated_at = OffsetDateTime::now_utc();
@@ -357,7 +363,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let id = id.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             if let Some(user) = s.users.get_mut(&id) {
                 if let Some(n) = name {
                     user.name = n;
@@ -384,8 +392,10 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let id = id.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
-            if let Some( ref new_email) = fields.email {
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
+            if let Some(ref new_email) = fields.email {
                 let normalized = new_email.to_lowercase();
                 if let Some(existing_id) = s.email_to_id.get(&normalized) {
                     if existing_id != &id {
@@ -396,9 +406,13 @@ impl AuthAdapter for InMemoryAuthAdapter {
                 }
             }
 
-            let old_email = s.users.get(&id).map(|u| u.email.clone()).ok_or(AdapterError::NotFound)?;
+            let old_email = s
+                .users
+                .get(&id)
+                .map(|u| u.email.clone())
+                .ok_or(AdapterError::NotFound)?;
 
-            if let Some( ref new_email) = fields.email {
+            if let Some(ref new_email) = fields.email {
                 let normalized = new_email.to_lowercase();
                 if normalized != old_email {
                     s.email_to_id.remove(&old_email);
@@ -442,8 +456,13 @@ impl AuthAdapter for InMemoryAuthAdapter {
     ) -> BoxFuture<'static, Result<(Vec<UserRecord>, usize), AdapterError>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
-            Ok(filter_and_paginate_users(s.users.values().cloned(), &filter))
+            let s = store
+                .read()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
+            Ok(filter_and_paginate_users(
+                s.users.values().cloned(),
+                &filter,
+            ))
         })
     }
 
@@ -451,7 +470,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let id = id.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             if let Some(user) = s.users.remove(&id) {
                 s.email_to_id.remove(&user.email);
                 // Cascade delete accounts and sessions
@@ -468,7 +489,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
     ) -> BoxFuture<'static, Result<AccountRecord, AdapterError>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let key = format!("{}:{}", input.provider_id, input.account_id);
             if s.accounts.contains_key(&key) {
                 return Err(AdapterError::UniqueViolation(format!(
@@ -508,7 +531,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let key = format!("{provider_id}:{account_id}");
         Box::pin(async move {
-            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let s = store
+                .read()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             Ok(s.accounts.get(&key).cloned())
         })
     }
@@ -520,7 +545,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let user_id = user_id.to_string();
         Box::pin(async move {
-            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let s = store
+                .read()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let accounts: Vec<AccountRecord> = s
                 .accounts
                 .values()
@@ -540,7 +567,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let user_id = user_id.to_string();
         let hash = password_hash.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let key = format!("credential:{user_id}");
             if let Some(account) = s.accounts.get_mut(&key) {
                 account.password = Some(hash);
@@ -576,7 +605,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let key = format!("{provider_id}:{account_id}");
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             if let Some(account) = s.accounts.get_mut(&key) {
                 account.access_token = access_token;
                 if refresh_token.is_some() {
@@ -605,7 +636,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let key = format!("{provider_id}:{account_id}");
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             s.accounts.remove(&key);
             Ok(())
         })
@@ -617,7 +650,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
     ) -> BoxFuture<'static, Result<SessionRecord, AdapterError>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let id = input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
             let now = OffsetDateTime::now_utc();
             let session = SessionRecord {
@@ -643,7 +678,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
     ) -> BoxFuture<'static, Result<SessionRecord, AdapterError>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let id = input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
             let now = OffsetDateTime::now_utc();
             let session = SessionRecord {
@@ -669,7 +706,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let token = token.to_string();
         Box::pin(async move {
-            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let s = store
+                .read()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             Ok(s.sessions.get(&token).cloned())
         })
     }
@@ -681,7 +720,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let user_id = user_id.to_string();
         Box::pin(async move {
-            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let s = store
+                .read()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let now = OffsetDateTime::now_utc();
             let sessions: Vec<SessionRecord> = s
                 .sessions
@@ -701,7 +742,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let token = token.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             if let Some(session) = s.sessions.get_mut(&token) {
                 session.expires_at = expires_at;
                 session.updated_at = OffsetDateTime::now_utc();
@@ -716,7 +759,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let token = token.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             s.sessions.remove(&token);
             Ok(())
         })
@@ -729,7 +774,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let user_id = user_id.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             s.sessions.retain(|_, ses| ses.user_id != user_id);
             Ok(())
         })
@@ -744,7 +791,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let user_id = user_id.to_string();
         let current_token = current_token.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             s.sessions
                 .retain(|token, ses| ses.user_id != user_id || token == &current_token);
             Ok(())
@@ -754,7 +803,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
     fn delete_expired_sessions(&self) -> BoxFuture<'static, Result<usize, AdapterError>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let now = OffsetDateTime::now_utc();
             let before = s.sessions.len();
             s.sessions.retain(|_, ses| ses.expires_at > now);
@@ -768,7 +819,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
     ) -> BoxFuture<'static, Result<VerificationRecord, AdapterError>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let id = input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
             let now = OffsetDateTime::now_utc();
             let record = VerificationRecord {
@@ -791,7 +844,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let identifier = identifier.to_string();
         Box::pin(async move {
-            let s = store.read().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let s = store
+                .read()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             Ok(s.verifications.get(&identifier).cloned())
         })
     }
@@ -803,7 +858,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let identifier = identifier.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let record = s.verifications.remove(&identifier);
             if let Some(r) = record {
                 if r.is_expired() {
@@ -824,7 +881,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
         let store = Arc::clone(&self.store);
         let identifier = identifier.to_string();
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             s.verifications.remove(&identifier);
             Ok(())
         })
@@ -833,7 +892,9 @@ impl AuthAdapter for InMemoryAuthAdapter {
     fn delete_expired_verifications(&self) -> BoxFuture<'static, Result<usize, AdapterError>> {
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let mut s = store.write().map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
             let now = OffsetDateTime::now_utc();
             let before = s.verifications.len();
             s.verifications.retain(|_, v| v.expires_at > now);

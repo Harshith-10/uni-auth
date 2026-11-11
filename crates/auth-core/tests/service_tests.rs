@@ -114,10 +114,7 @@ async fn test_duplicate_email_rejection() {
         .await
         .unwrap_err();
 
-    assert_eq!(
-        err.error_code(),
-        "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL"
-    );
+    assert_eq!(err.error_code(), "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL");
 }
 
 #[tokio::test]
@@ -201,8 +198,20 @@ async fn test_password_reset_revokes_all_active_sessions() {
     let session_token_2 = signin_res.token;
 
     // Verify both sessions exist
-    assert!(service.get_session(&session_token_1).await.unwrap().is_some());
-    assert!(service.get_session(&session_token_2).await.unwrap().is_some());
+    assert!(
+        service
+            .get_session(&session_token_1)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        service
+            .get_session(&session_token_2)
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     // Request password reset
     let reset_msg = service
@@ -231,28 +240,44 @@ async fn test_password_reset_revokes_all_active_sessions() {
         .unwrap();
 
     // Re-using the token fails (single-use)
-    assert!(service
-        .reset_password(ResetPasswordRequest {
-            token: Some(reset_token),
-            new_password: "anotherpassword3".to_string(),
-        })
-        .await
-        .is_err());
+    assert!(
+        service
+            .reset_password(ResetPasswordRequest {
+                token: Some(reset_token),
+                new_password: "anotherpassword3".to_string(),
+            })
+            .await
+            .is_err()
+    );
 
     // Both previous sessions must now be revoked!
-    assert!(service.get_session(&session_token_1).await.unwrap().is_none());
-    assert!(service.get_session(&session_token_2).await.unwrap().is_none());
+    assert!(
+        service
+            .get_session(&session_token_1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        service
+            .get_session(&session_token_2)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Old password no longer works
-    assert!(service
-        .sign_in_email(SignInEmailRequest {
-            email: "eve@example.com".to_string(),
-            password: "originalpassword1".to_string(),
-            callback_url: None,
-            remember_me: None,
-        })
-        .await
-        .is_err());
+    assert!(
+        service
+            .sign_in_email(SignInEmailRequest {
+                email: "eve@example.com".to_string(),
+                password: "originalpassword1".to_string(),
+                callback_url: None,
+                remember_me: None,
+            })
+            .await
+            .is_err()
+    );
 
     // New password works
     let new_signin = service
@@ -351,7 +376,10 @@ async fn test_session_revocation_methods() {
     assert_eq!(sessions.len(), 3);
 
     // Revoke t2
-    service.revoke_session(&user_res.user.id, &t2).await.unwrap();
+    service
+        .revoke_session(&user_res.user.id, &t2)
+        .await
+        .unwrap();
     assert!(service.get_session(&t2).await.unwrap().is_none());
     assert!(service.get_session(&t1).await.unwrap().is_some());
     assert!(service.get_session(&t3).await.unwrap().is_some());
@@ -521,9 +549,11 @@ async fn test_credential_account_with_distinct_account_id() {
         .await
         .unwrap();
 
-    let scrypt_hash =
-        hash_scrypt_better_auth("aabbccddeeff00112233445566778899", "caf\u{00e9}-password-99")
-            .unwrap();
+    let scrypt_hash = hash_scrypt_better_auth(
+        "aabbccddeeff00112233445566778899",
+        "caf\u{00e9}-password-99",
+    )
+    .unwrap();
 
     // Create a credential account where account_id != user.id
     service
@@ -684,11 +714,13 @@ async fn test_admin_plugin_rbac_ban_impersonation_and_lifecycle() {
     );
 
     // Existing session is immediately revoked
-    assert!(service
-        .get_session(&member_signin.token)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        service
+            .get_session(&member_signin.token)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Banned user cannot sign in (403 BANNED_USER)
     let banned_login_err = service
@@ -746,18 +778,17 @@ async fn test_admin_plugin_rbac_ban_impersonation_and_lifecycle() {
     // Stop impersonating restores admin session and deletes impersonated session
     let signed_admin_token = service.sign_token(admin_signup.token.as_ref().unwrap());
     let stopped = service
-        .admin_stop_impersonating(
-            &imp_res.session,
-            Some(&signed_admin_token),
-        )
+        .admin_stop_impersonating(&imp_res.session, Some(&signed_admin_token))
         .await
         .expect("stop_impersonating should restore admin session");
     assert_eq!(stopped.user.id, admin_wire.id);
-    assert!(service
-        .get_session(&imp_res.session.token)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        service
+            .get_session(&imp_res.session.token)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // 8. Admin sets user password and lists users with search
     service
@@ -821,7 +852,10 @@ async fn test_update_user_validation_and_null_image_handling() {
 
     // 1. Rejecting email in /update-user
     let mut extra_with_email = serde_json::Map::new();
-    extra_with_email.insert("email".to_string(), serde_json::Value::String("hacked@example.com".into()));
+    extra_with_email.insert(
+        "email".to_string(),
+        serde_json::Value::String("hacked@example.com".into()),
+    );
     let email_err = service
         .update_user(
             &signup.user.id,

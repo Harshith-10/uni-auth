@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Method;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use thiserror::Error;
 
 use auth_proto::access::Connector;
@@ -19,7 +19,7 @@ use auth_proto::{
     UpdateUserRequest, UserWire, VerifyEmailResponse,
 };
 
-use crate::plugin::{matches_core_session_signal, AuthClientPlugin, SESSION_SIGNAL};
+use crate::plugin::{AuthClientPlugin, SESSION_SIGNAL, matches_core_session_signal};
 use crate::plugins::{
     AdminClientExt, AdminClientPlugin, OneTimeTokenClientExt, OneTimeTokenClientPlugin,
 };
@@ -108,7 +108,9 @@ impl BetterAuthNativeClient {
 
     /// Retrieves a registered `AuthClientPlugin` by type.
     pub fn get_plugin<P: AuthClientPlugin>(&self) -> Option<&P> {
-        self.plugins.iter().find_map(|p| p.as_any().downcast_ref::<P>())
+        self.plugins
+            .iter()
+            .find_map(|p| p.as_any().downcast_ref::<P>())
     }
 
     /// Subscribes to reactive signals emitted by this client (e.g. `$sessionSignal`).
@@ -192,7 +194,10 @@ impl BetterAuthNativeClient {
         url: &str,
         body: Option<serde_json::Value>,
     ) -> Result<T, ClientError> {
-        let mut builder = self.http.request(method, url).headers(self.prepare_headers());
+        let mut builder = self
+            .http
+            .request(method, url)
+            .headers(self.prepare_headers());
 
         if let Some(b) = body {
             builder = builder.json(&b);
@@ -266,24 +271,14 @@ impl BetterAuthNativeClient {
 
     /// Retrieves the active user session and user record.
     pub async fn get_session(&self) -> Result<Option<SessionAndUserResponse>, ClientError> {
-        self.send_auth_request(
-            Method::GET,
-            "/get-session",
-            None::<&()>,
-            None::<&()>,
-        )
-        .await
+        self.send_auth_request(Method::GET, "/get-session", None::<&()>, None::<&()>)
+            .await
     }
 
     /// Lists active sessions for the currently authenticated user.
     pub async fn list_sessions(&self) -> Result<Vec<SessionWire>, ClientError> {
-        self.send_auth_request(
-            Method::GET,
-            "/list-sessions",
-            None::<&()>,
-            None::<&()>,
-        )
-        .await
+        self.send_auth_request(Method::GET, "/list-sessions", None::<&()>, None::<&()>)
+            .await
     }
 
     /// Revokes a specific session by token or session ID.
@@ -304,13 +299,8 @@ impl BetterAuthNativeClient {
 
     /// Revokes all active sessions for the currently authenticated user.
     pub async fn revoke_sessions(&self) -> Result<StatusResponse, ClientError> {
-        self.send_auth_request(
-            Method::POST,
-            "/revoke-sessions",
-            None::<&()>,
-            None::<&()>,
-        )
-        .await
+        self.send_auth_request(Method::POST, "/revoke-sessions", None::<&()>, None::<&()>)
+            .await
     }
 
     /// Revokes all sessions belonging to the current user EXCEPT the current session.
@@ -327,12 +317,7 @@ impl BetterAuthNativeClient {
     /// Signs out the current user and clears the token from storage.
     pub async fn sign_out(&self) -> Result<SignOutResponse, ClientError> {
         let res = self
-            .send_auth_request(
-                Method::POST,
-                "/sign-out",
-                None::<&()>,
-                None::<&()>,
-            )
+            .send_auth_request(Method::POST, "/sign-out", None::<&()>, None::<&()>)
             .await;
         let _ = self.storage.delete_token();
         res
@@ -480,13 +465,8 @@ impl BetterAuthNativeClient {
 
     /// Lists connected OAuth accounts for the current user.
     pub async fn list_accounts(&self) -> Result<Vec<AccountListEntryWire>, ClientError> {
-        self.send_auth_request(
-            Method::GET,
-            "/list-accounts",
-            None::<&()>,
-            None::<&()>,
-        )
-        .await
+        self.send_auth_request(Method::GET, "/list-accounts", None::<&()>, None::<&()>)
+            .await
     }
 
     /// Unlinks a connected OAuth account.
@@ -533,7 +513,9 @@ impl BetterAuthNativeClient {
     // ──────────────────────────────────────────────
 
     /// Generates a single-use one-time token (OTT).
-    pub async fn generate_one_time_token(&self) -> Result<OneTimeTokenGenerateResponse, ClientError> {
+    pub async fn generate_one_time_token(
+        &self,
+    ) -> Result<OneTimeTokenGenerateResponse, ClientError> {
         self.one_time_token().generate().await
     }
 
@@ -584,7 +566,9 @@ impl BetterAuthNativeClient {
         ban_reason: Option<String>,
         ban_expires_in: Option<i64>,
     ) -> Result<AdminUserResponse, ClientError> {
-        self.admin().ban_user(user_id, ban_reason, ban_expires_in).await
+        self.admin()
+            .ban_user(user_id, ban_reason, ban_expires_in)
+            .await
     }
 
     pub async fn admin_unban_user(

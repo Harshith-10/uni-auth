@@ -52,7 +52,8 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 /// with the default 120-second timeout.
 ///
 /// Returns `(port, receiver_channel)`.
-pub async fn start_loopback_listener() -> Result<(u16, oneshot::Receiver<Result<String, String>>), std::io::Error> {
+pub async fn start_loopback_listener()
+-> Result<(u16, oneshot::Receiver<Result<String, String>>), std::io::Error> {
     start_loopback_listener_with_timeout(DEFAULT_LOOPBACK_TIMEOUT).await
 }
 
@@ -109,7 +110,8 @@ pub async fn start_loopback_listener_with_timeout(
                                     } else if let Some(err) = error_found {
                                         let _ = sender.send(Err(err));
                                     } else {
-                                        let _ = sender.send(Err("No token found in callback".to_string()));
+                                        let _ = sender
+                                            .send(Err("No token found in callback".to_string()));
                                     }
                                 }
                             }
@@ -164,14 +166,18 @@ impl BetterAuthNativeClient {
 
         let status = res.status().as_u16();
         if status >= 400 {
-            return Err(ClientError::OAuth(format!("Social sign-in initiation failed with HTTP {status}")));
+            return Err(ClientError::OAuth(format!(
+                "Social sign-in initiation failed with HTTP {status}"
+            )));
         }
 
         let body: serde_json::Value = res.json().await?;
         let auth_url = body
             .get("url")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ClientError::OAuth("Missing 'url' in social sign-in response".to_string()))?
+            .ok_or_else(|| {
+                ClientError::OAuth("Missing 'url' in social sign-in response".to_string())
+            })?
             .to_string();
 
         Ok((auth_url, rx))

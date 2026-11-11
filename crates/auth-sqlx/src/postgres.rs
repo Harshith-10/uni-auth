@@ -526,7 +526,8 @@ impl AuthAdapter for PostgresAuthAdapter {
     ) -> BoxFuture<'static, Result<(Vec<UserRecord>, usize), AdapterError>> {
         let pool = self.pool.clone();
         Box::pin(async move {
-            let mut count_qb = QueryBuilder::<sqlx::Postgres>::new(r#"SELECT COUNT(*) FROM "user""#);
+            let mut count_qb =
+                QueryBuilder::<sqlx::Postgres>::new(r#"SELECT COUNT(*) FROM "user""#);
             apply_postgres_user_filters(&mut count_qb, &filter);
             let total: i64 = count_qb
                 .build_query_scalar()
@@ -589,13 +590,18 @@ impl AuthAdapter for PostgresAuthAdapter {
         let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
-            let mut tx = pool.begin().await.map_err(|e| AdapterError::Query(e.to_string()))?;
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
             sqlx::query(r#"DELETE FROM "user" WHERE id = $1"#)
                 .bind(id)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| AdapterError::Query(e.to_string()))?;
-            tx.commit().await.map_err(|e| AdapterError::Query(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
             Ok(())
         })
     }
@@ -1074,13 +1080,12 @@ impl AuthAdapter for PostgresAuthAdapter {
         let pool = self.pool.clone();
         let identifier = identifier.to_string();
         Box::pin(async move {
-            let row = sqlx::query(
-                r#"DELETE FROM "verification" WHERE identifier = $1 RETURNING *"#,
-            )
-            .bind(&identifier)
-            .fetch_optional(&pool)
-            .await
-            .map_err(|e| AdapterError::Query(e.to_string()))?;
+            let row =
+                sqlx::query(r#"DELETE FROM "verification" WHERE identifier = $1 RETURNING *"#)
+                    .bind(&identifier)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| AdapterError::Query(e.to_string()))?;
 
             if let Some(r) = row {
                 let record = map_verification_row(r)?;

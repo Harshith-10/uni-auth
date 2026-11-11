@@ -215,8 +215,7 @@ fn test_get_session_response_shape() {
     assert_eq!(session_and_user.user.email, "one@example.com");
 
     // Also verify Option<SessionAndUserResponse> deserializes null
-    let unauthenticated: Option<SessionAndUserResponse> =
-        serde_json::from_str("null").unwrap();
+    let unauthenticated: Option<SessionAndUserResponse> = serde_json::from_str("null").unwrap();
     assert_eq!(unauthenticated, None);
 }
 
@@ -300,7 +299,10 @@ fn test_update_user_and_delete_user_wire_format() {
     // 3. String image -> Some(Some(url))
     let str_json = json!({ "image": "https://example.com/avatar.png" });
     let req3: UpdateUserRequest = serde_json::from_value(str_json).unwrap();
-    assert_eq!(req3.image, Some(Some("https://example.com/avatar.png".to_string())));
+    assert_eq!(
+        req3.image,
+        Some(Some("https://example.com/avatar.png".to_string()))
+    );
 
     // 4. Captures unknown field (like email)
     let extra_json = json!({ "email": "new@example.com" });

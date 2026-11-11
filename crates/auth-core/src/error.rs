@@ -72,16 +72,10 @@ pub enum AuthError {
     BannedUser(String),
 
     #[error("{message}")]
-    Forbidden {
-        code: &'static str,
-        message: String,
-    },
+    Forbidden { code: &'static str, message: String },
 
     #[error("{message}")]
-    BadRequest {
-        code: &'static str,
-        message: String,
-    },
+    BadRequest { code: &'static str, message: String },
 
     #[error("Database adapter error: {0}")]
     Adapter(AdapterError),
@@ -166,8 +160,7 @@ impl AuthError {
             | Self::EmailPasswordDisabled
             | Self::SignUpDisabled
             | Self::BadRequest { .. } => 400,
-            Self::InvalidEmailOrPassword
-            | Self::SessionExpired => 401,
+            Self::InvalidEmailOrPassword | Self::SessionExpired => 401,
             Self::EmailNotVerified
             | Self::SessionNotFresh
             | Self::InvalidOrigin

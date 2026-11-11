@@ -2,12 +2,12 @@
 //! $sessionSignal reactivity, and AdminClientExt / OneTimeTokenClientExt extension traits.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use time::Duration;
 use tokio::net::TcpListener;
 
-use auth_axum::{auth_router, AuthState};
+use auth_axum::{AuthState, auth_router};
 use auth_client::plugin::{AuthClientPlugin, ClientSignalListener, SESSION_SIGNAL};
 use auth_client::transport::{ClientRequestContext, ClientResponseContext};
 use auth_client::{
@@ -105,7 +105,12 @@ async fn test_client_plugin_interceptors() {
 
     // 1. Send request
     let _ = client
-        .sign_up_email("Plugin User", "plugin@example.com", "mypassword123", Some(true))
+        .sign_up_email(
+            "Plugin User",
+            "plugin@example.com",
+            "mypassword123",
+            Some(true),
+        )
         .await
         .unwrap();
 
@@ -137,7 +142,12 @@ async fn test_reactive_session_signal_listener() {
 
     // Sign up fires $sessionSignal automatically
     client
-        .sign_up_email("Signal User", "signal@example.com", "mypassword123", Some(true))
+        .sign_up_email(
+            "Signal User",
+            "signal@example.com",
+            "mypassword123",
+            Some(true),
+        )
         .await
         .unwrap();
 
@@ -152,13 +162,21 @@ async fn test_admin_client_ext_facade_and_local_rbac() {
 
     // 1. Local client-side RBAC evaluation (zero network roundtrip)
     let mut admin_check = HashMap::new();
-    admin_check.insert("user".to_string(), vec!["ban".to_string(), "delete".to_string()]);
+    admin_check.insert(
+        "user".to_string(),
+        vec!["ban".to_string(), "delete".to_string()],
+    );
     assert!(client.admin().check_role_permission("admin", &admin_check));
     assert!(!client.admin().check_role_permission("user", &admin_check));
 
     // 2. Sign up admin user
     let admin_res = client
-        .sign_up_email("Root Admin", "root_admin@example.com", "rootpass123", Some(true))
+        .sign_up_email(
+            "Root Admin",
+            "root_admin@example.com",
+            "rootpass123",
+            Some(true),
+        )
         .await
         .unwrap();
 
@@ -189,9 +207,16 @@ async fn test_admin_client_ext_facade_and_local_rbac() {
     assert_eq!(created.user.email, "sub_user@example.com");
 
     // 4. Extension trait: client.admin().impersonate_user and stop_impersonating
-    let imp = client.admin().impersonate_user(&created.user.id).await.unwrap();
+    let imp = client
+        .admin()
+        .impersonate_user(&created.user.id)
+        .await
+        .unwrap();
     assert_eq!(imp.user.email, "sub_user@example.com");
-    assert_eq!(imp.session.impersonated_by.as_deref(), Some(admin_res.user.id.as_str()));
+    assert_eq!(
+        imp.session.impersonated_by.as_deref(),
+        Some(admin_res.user.id.as_str())
+    );
 
     let restored = client.admin().stop_impersonating().await.unwrap();
     assert_eq!(restored.user.email, "root_admin@example.com");
@@ -204,7 +229,12 @@ async fn test_one_time_token_client_ext_facade() {
     let client = BetterAuthNativeClient::new(base_url, storage as Arc<dyn TokenStorage>);
 
     client
-        .sign_up_email("OTT Client", "ott_client@example.com", "pass12345", Some(true))
+        .sign_up_email(
+            "OTT Client",
+            "ott_client@example.com",
+            "pass12345",
+            Some(true),
+        )
         .await
         .unwrap();
 
@@ -213,6 +243,10 @@ async fn test_one_time_token_client_ext_facade() {
     assert!(!ott_res.token.is_empty());
 
     // Extension trait: client.one_time_token().verify()
-    let verify_res = client.one_time_token().verify(&ott_res.token).await.unwrap();
+    let verify_res = client
+        .one_time_token()
+        .verify(&ott_res.token)
+        .await
+        .unwrap();
     assert_eq!(verify_res.user.email, "ott_client@example.com");
 }

@@ -1,16 +1,18 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::{
+    ActiveTheme as _, Sizable as _,
     alert::Alert,
     button::Button,
     form::{Field, Form},
+    h_flex,
     input::Input,
     separator::Separator,
     tag::Tag,
-    ActiveTheme as _, Sizable as _, h_flex, v_flex,
+    v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{div, px, Context, IntoElement, ParentElement as _, SharedString, Styled as _};
+use gpui_kit::{Context, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
 
 use crate::app::{AuthMode, DesktopAuthApp};
 

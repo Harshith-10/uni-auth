@@ -1,19 +1,18 @@
 //! Core authentication service coordinating business logic, crypto, hooks, plugins, and persistence.
 
+use auth_proto::{
+    AccountListEntryWire, AdminBanUserRequest, AdminCreateUserRequest, AdminHasPermissionRequest,
+    AdminListUserSessionsResponse, AdminListUsersQuery, AdminListUsersResponse,
+    AdminPermissionResponse, AdminSetRoleRequest, AdminSetUserPasswordRequest,
+    AdminSuccessResponse, AdminUpdateUserRequest, AdminUserResponse, ChangePasswordRequest,
+    ChangePasswordResponse, DeleteUserRequest, DeleteUserResponse, OneTimeTokenGenerateResponse,
+    RequestPasswordResetRequest, ResetPasswordRequest, SendVerificationEmailRequest,
+    SessionAndUserResponse, SessionWire, SignInEmailRequest, SignInResponse, SignOutRequest,
+    SignOutResponse, SignUpEmailRequest, SignUpResponse, StatusMessageResponse, StatusResponse,
+    UpdateUserRequest, UpdateUserResponse, UserWire, VerifyEmailResponse, error_codes, url_encode,
+};
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
-use auth_proto::{
-    error_codes, AccountListEntryWire, AdminBanUserRequest, AdminCreateUserRequest,
-    AdminHasPermissionRequest, AdminListUserSessionsResponse, AdminListUsersQuery,
-    AdminListUsersResponse, AdminPermissionResponse, AdminSetRoleRequest,
-    AdminSetUserPasswordRequest, AdminSuccessResponse, AdminUpdateUserRequest, AdminUserResponse,
-    ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest, DeleteUserResponse,
-    OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest,
-    SendVerificationEmailRequest, SessionAndUserResponse, SessionWire, SignInEmailRequest,
-    SignInResponse, SignOutRequest, SignOutResponse, SignUpEmailRequest, SignUpResponse,
-    StatusMessageResponse, StatusResponse, UpdateUserRequest, UpdateUserResponse, UserWire,
-    VerifyEmailResponse, url_encode,
-};
 
 use crate::access::AdminConfig;
 use crate::adapter::AuthAdapter;
@@ -22,9 +21,8 @@ use crate::email::{EmailSender, NoopEmailSender};
 use crate::error::{AdapterError, AuthError};
 use crate::hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter};
 use crate::models::{
-    AccountRecord, AdminUpdateUserFields, CreateAccountInput,
-    CreateSessionInput, CreateUserInput, CreateVerificationInput, RequestMeta, SessionRecord,
-    UserRecord,
+    AccountRecord, AdminUpdateUserFields, CreateAccountInput, CreateSessionInput, CreateUserInput,
+    CreateVerificationInput, RequestMeta, SessionRecord, UserRecord,
 };
 use crate::plugin::admin::{AdminPlugin, AdminServiceExt};
 use crate::plugin::{AuthPlugin, BetterAuthPlugin, HookedAdapter, PluginRegistry};
@@ -130,7 +128,8 @@ impl AuthService {
 
     pub fn with_admin_config(mut self, admin_config: AdminConfig) -> Self {
         self.admin_config = admin_config.clone();
-        self.plugins.register(Arc::new(AdminPlugin::with_config(admin_config)));
+        self.plugins
+            .register(Arc::new(AdminPlugin::with_config(admin_config)));
         self.rebuild_hooked_adapter();
         self
     }
@@ -355,7 +354,9 @@ impl AuthService {
             .await?;
 
         let session_wire = session.to_wire();
-        self.hooks.on_session_created(&session_wire, &user_wire).await;
+        self.hooks
+            .on_session_created(&session_wire, &user_wire)
+            .await;
         for plugin in self.legacy_plugins.iter() {
             plugin
                 .on_after_session_issued(&session_wire, &user_wire)
@@ -376,9 +377,7 @@ impl AuthService {
             return Ok(Some(account));
         }
         let accounts = self.adapter.find_accounts_by_user_id(user_id).await?;
-        Ok(accounts
-            .into_iter()
-            .find(|a| a.provider_id == "credential"))
+        Ok(accounts.into_iter().find(|a| a.provider_id == "credential"))
     }
 
     // ──────────────────────────────────────────────
@@ -386,7 +385,10 @@ impl AuthService {
     // ──────────────────────────────────────────────
 
     /// Registers a new user with email and password.
-    pub async fn sign_up_email(&self, req: SignUpEmailRequest) -> Result<SignUpResponse, AuthError> {
+    pub async fn sign_up_email(
+        &self,
+        req: SignUpEmailRequest,
+    ) -> Result<SignUpResponse, AuthError> {
         self.sign_up_email_with_meta(req, RequestMeta::default())
             .await
     }
@@ -397,10 +399,7 @@ impl AuthService {
         req: SignUpEmailRequest,
         meta: RequestMeta,
     ) -> Result<SignUpResponse, AuthError> {
-        let rate_key = format!(
-            "sign-up:{}",
-            meta.ip_address.as_deref().unwrap_or("local")
-        );
+        let rate_key = format!("sign-up:{}", meta.ip_address.as_deref().unwrap_or("local"));
         self.check_rate_limit(&rate_key)?;
 
         let email = req.email.trim().to_lowercase();
@@ -501,7 +500,10 @@ impl AuthService {
     }
 
     /// Authenticates a user with email and password, issuing a new session.
-    pub async fn sign_in_email(&self, req: SignInEmailRequest) -> Result<SignInResponse, AuthError> {
+    pub async fn sign_in_email(
+        &self,
+        req: SignInEmailRequest,
+    ) -> Result<SignInResponse, AuthError> {
         self.sign_in_email_with_meta(req, RequestMeta::default())
             .await
     }
@@ -512,10 +514,7 @@ impl AuthService {
         req: SignInEmailRequest,
         meta: RequestMeta,
     ) -> Result<SignInResponse, AuthError> {
-        let rate_key = format!(
-            "sign-in:{}",
-            meta.ip_address.as_deref().unwrap_or("local")
-        );
+        let rate_key = format!("sign-in:{}", meta.ip_address.as_deref().unwrap_or("local"));
         self.check_rate_limit(&rate_key)?;
 
         let email = req.email.trim().to_lowercase();
@@ -764,7 +763,10 @@ impl AuthService {
                 .map(|r| format!("?callbackURL={}", url_encode(&r)))
                 .unwrap_or_default();
 
-            let reset_url = format!("{}/reset-password/{}{}", self.config.base_url, token, redirect_param);
+            let reset_url = format!(
+                "{}/reset-password/{}{}",
+                self.config.base_url, token, redirect_param
+            );
 
             let _ = self
                 .email_sender
@@ -786,7 +788,10 @@ impl AuthService {
     }
 
     /// Resets the user's password using a verification token and revokes all active sessions.
-    pub async fn reset_password(&self, req: ResetPasswordRequest) -> Result<StatusResponse, AuthError> {
+    pub async fn reset_password(
+        &self,
+        req: ResetPasswordRequest,
+    ) -> Result<StatusResponse, AuthError> {
         let token = req.token.ok_or(AuthError::InvalidToken)?;
 
         if req.new_password.len() < self.config.min_password_length {
@@ -939,10 +944,7 @@ impl AuthService {
         }
 
         if req.name.is_none() && req.image.is_none() && req.extra.is_empty() {
-            return Err(AuthError::bad_request(
-                "BAD_REQUEST",
-                "No fields to update",
-            ));
+            return Err(AuthError::bad_request("BAD_REQUEST", "No fields to update"));
         }
 
         let updated = self
@@ -1154,21 +1156,21 @@ impl AuthService {
                 .await?
                 .ok_or(AuthError::InvalidToken)?;
 
-        let session = self
-            .adapter
-            .find_session_by_token(&record.value)
-            .await?
-            .ok_or(AuthError::SessionExpired)?;
+            let session = self
+                .adapter
+                .find_session_by_token(&record.value)
+                .await?
+                .ok_or(AuthError::SessionExpired)?;
 
-        if session.is_expired() {
-            return Err(AuthError::SessionExpired);
-        }
+            if session.is_expired() {
+                return Err(AuthError::SessionExpired);
+            }
 
-        let user = self
-            .adapter
-            .find_user_by_id(&session.user_id)
-            .await?
-            .ok_or(AuthError::UserNotFound)?;
+            let user = self
+                .adapter
+                .find_user_by_id(&session.user_id)
+                .await?
+                .ok_or(AuthError::UserNotFound)?;
 
             Ok(SessionAndUserResponse {
                 session: session.to_wire(),
@@ -1182,7 +1184,10 @@ impl AuthService {
     // ──────────────────────────────────────────────
 
     /// Lists connected accounts for a user with sensitive fields stripped.
-    pub async fn list_accounts(&self, user_id: &str) -> Result<Vec<AccountListEntryWire>, AuthError> {
+    pub async fn list_accounts(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<AccountListEntryWire>, AuthError> {
         let accounts = self.adapter.find_accounts_by_user_id(user_id).await?;
         Ok(accounts
             .into_iter()
@@ -1225,11 +1230,9 @@ impl AuthService {
         let target = accounts
             .iter()
             .find(|a| {
-                let provider_matches =
-                    provider_id.is_empty() || a.provider_id == provider_id;
-                let account_matches = account_id.is_empty()
-                    || a.account_id == account_id
-                    || a.id == account_id;
+                let provider_matches = provider_id.is_empty() || a.provider_id == provider_id;
+                let account_matches =
+                    account_id.is_empty() || a.account_id == account_id || a.id == account_id;
                 provider_matches && account_matches
             })
             .or_else(|| {
@@ -1302,7 +1305,9 @@ impl AuthService {
         actor: &UserWire,
         target_user_id: &str,
     ) -> Result<AdminListUserSessionsResponse, AuthError> {
-        self.admin()?.list_user_sessions(actor, target_user_id).await
+        self.admin()?
+            .list_user_sessions(actor, target_user_id)
+            .await
     }
 
     /// `POST /api/auth/admin/ban-user`
@@ -1330,7 +1335,9 @@ impl AuthService {
         target_user_id: &str,
         meta: RequestMeta,
     ) -> Result<SessionAndUserResponse, AuthError> {
-        self.admin()?.impersonate_user(actor, target_user_id, meta).await
+        self.admin()?
+            .impersonate_user(actor, target_user_id, meta)
+            .await
     }
 
     /// `POST /api/auth/admin/stop-impersonating`
@@ -1339,7 +1346,9 @@ impl AuthService {
         current_session: &SessionWire,
         admin_token_or_signed: Option<&str>,
     ) -> Result<SessionAndUserResponse, AuthError> {
-        self.admin()?.stop_impersonating(current_session, admin_token_or_signed).await
+        self.admin()?
+            .stop_impersonating(current_session, admin_token_or_signed)
+            .await
     }
 
     /// `POST /api/auth/admin/revoke-user-session`
@@ -1348,7 +1357,9 @@ impl AuthService {
         actor: &UserWire,
         session_token_or_signed: &str,
     ) -> Result<AdminSuccessResponse, AuthError> {
-        self.admin()?.revoke_user_session(actor, session_token_or_signed).await
+        self.admin()?
+            .revoke_user_session(actor, session_token_or_signed)
+            .await
     }
 
     /// `POST /api/auth/admin/revoke-user-sessions`
@@ -1357,7 +1368,9 @@ impl AuthService {
         actor: &UserWire,
         target_user_id: &str,
     ) -> Result<AdminSuccessResponse, AuthError> {
-        self.admin()?.revoke_user_sessions(actor, target_user_id).await
+        self.admin()?
+            .revoke_user_sessions(actor, target_user_id)
+            .await
     }
 
     /// `POST /api/auth/admin/remove-user`
@@ -1396,9 +1409,9 @@ impl AuthService {
         let oauth_state = crypto::generate_random_token(32);
         let code_verifier = crypto::generate_random_token(32);
 
-        use sha2::{Digest, Sha256};
-        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use sha2::{Digest, Sha256};
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
 
         let state_data = crate::oauth::OAuthStateData {
@@ -1408,8 +1421,8 @@ impl AuthService {
             error_callback_url: payload.error_callback_url,
             link_user_id: None,
         };
-        let value = serde_json::to_string(&state_data)
-            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let value =
+            serde_json::to_string(&state_data).map_err(|e| AuthError::Internal(e.to_string()))?;
 
         let expires_at = OffsetDateTime::now_utc() + Duration::minutes(10);
         self.adapter
@@ -1454,9 +1467,9 @@ impl AuthService {
         let oauth_state = crypto::generate_random_token(32);
         let code_verifier = crypto::generate_random_token(32);
 
-        use sha2::{Digest, Sha256};
-        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use sha2::{Digest, Sha256};
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
 
         let state_data = crate::oauth::OAuthStateData {
@@ -1466,8 +1479,8 @@ impl AuthService {
             error_callback_url: payload.error_callback_url,
             link_user_id: Some(user_id.to_string()),
         };
-        let value = serde_json::to_string(&state_data)
-            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        let value =
+            serde_json::to_string(&state_data).map_err(|e| AuthError::Internal(e.to_string()))?;
 
         let expires_at = OffsetDateTime::now_utc() + Duration::minutes(10);
         self.adapter
@@ -1528,7 +1541,10 @@ impl AuthService {
         };
 
         serde_json::from_str(&record.value).map_err(|e| {
-            AuthError::bad_request("INVALID_STATE", format!("Corrupted OAuth state payload: {e}"))
+            AuthError::bad_request(
+                "INVALID_STATE",
+                format!("Corrupted OAuth state payload: {e}"),
+            )
         })
     }
 
@@ -1542,7 +1558,11 @@ impl AuthService {
     ) -> Result<OAuthCallbackResult, AuthError> {
         // Case 1: Account linking flow
         if let Some(target_user_id) = link_user_id {
-            if let Some(existing_acc) = self.adapter.find_account(provider_name, &profile.account_id).await? {
+            if let Some(existing_acc) = self
+                .adapter
+                .find_account(provider_name, &profile.account_id)
+                .await?
+            {
                 if existing_acc.user_id != target_user_id {
                     return Err(AuthError::SocialAccountAlreadyLinked);
                 }
@@ -1574,12 +1594,18 @@ impl AuthService {
                     })
                     .await?;
             }
-            return Ok(OAuthCallbackResult::Linked { user_id: target_user_id });
+            return Ok(OAuthCallbackResult::Linked {
+                user_id: target_user_id,
+            });
         }
 
         // Case 2: Sign-in / sign-up flow
         let mut is_new_user = false;
-        let user = if let Some(existing_acc) = self.adapter.find_account(provider_name, &profile.account_id).await? {
+        let user = if let Some(existing_acc) = self
+            .adapter
+            .find_account(provider_name, &profile.account_id)
+            .await?
+        {
             self.adapter
                 .update_account_tokens(
                     provider_name,

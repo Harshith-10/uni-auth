@@ -1,8 +1,8 @@
 //! Shared state for the Axum Better Auth router.
 
+use auth_core::AuthService;
 use std::collections::HashMap;
 use std::sync::Arc;
-use auth_core::AuthService;
 
 pub use auth_core::{OAuthHttpClient, OAuthProviderConfig, ReqwestOAuthClient};
 
@@ -96,7 +96,9 @@ impl AuthState {
             &self.same_site,
         );
         if let Ok(val) = cookie.parse() {
-            response.headers_mut().append(axum::http::header::SET_COOKIE, val);
+            response
+                .headers_mut()
+                .append(axum::http::header::SET_COOKIE, val);
         }
         if let Ok(val) = signed.parse() {
             response.headers_mut().insert("set-auth-token", val);
@@ -111,7 +113,9 @@ impl AuthState {
             &self.same_site,
         );
         if let Ok(val) = clear.parse() {
-            response.headers_mut().append(axum::http::header::SET_COOKIE, val);
+            response
+                .headers_mut()
+                .append(axum::http::header::SET_COOKIE, val);
         }
     }
 }

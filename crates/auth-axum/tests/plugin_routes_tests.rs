@@ -4,15 +4,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::routing::get;
-use axum::Router;
 use tower::ServiceExt;
 
-use auth_axum::plugin::{check_endpoint_conflicts, AxumAuthPlugin, RouteDescriptor};
-use auth_axum::{auth_router, AuthState};
+use auth_axum::plugin::{AxumAuthPlugin, RouteDescriptor, check_endpoint_conflicts};
+use auth_axum::{AuthState, auth_router};
 use auth_core::adapter::BoxFuture;
 use auth_core::error::AuthError;
 use auth_core::plugin::{BetterAuthPlugin, EndpointHookContext};
@@ -121,7 +121,9 @@ async fn test_axum_plugin_dynamic_route_mounting() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["message"], "pong");
 }

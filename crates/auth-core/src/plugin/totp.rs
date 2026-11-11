@@ -37,11 +37,7 @@ impl TotpValidator {
             | ((u32::from(hash[offset + 2])) << 8)
             | u32::from(hash[offset + 3]);
         let modulo = 10u32.pow(self.digits);
-        format!(
-            "{:0width$}",
-            binary % modulo,
-            width = self.digits as usize
-        )
+        format!("{:0width$}", binary % modulo, width = self.digits as usize)
     }
 
     /// Verifies a TOTP code allowing a `+-1` time-step drift window.

@@ -1,6 +1,6 @@
 use auth_client::{AuthStore, BetterAuthNativeClient, KeyringTokenStorage};
-use desktop_gpui::{tokio_handle, DesktopAuthApp};
-use gpui_kit::{px, AppContext, Bounds, Point, Size, WindowBounds, WindowOptions};
+use desktop_gpui::{DesktopAuthApp, tokio_handle};
+use gpui_kit::{AppContext, Bounds, Point, Size, WindowBounds, WindowOptions, px};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 

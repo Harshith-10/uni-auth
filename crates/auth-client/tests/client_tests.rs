@@ -1,12 +1,12 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use time::Duration;
 use tokio::net::TcpListener;
 
-use auth_axum::{auth_router, AuthState};
+use auth_axum::{AuthState, auth_router};
 use auth_client::{
-    start_loopback_listener, AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage,
-    TokenStorage,
+    AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage, TokenStorage,
+    start_loopback_listener,
 };
 use auth_core::models::AdminUpdateUserFields;
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
@@ -50,7 +50,10 @@ async fn start_test_server() -> (String, Arc<AuthService>) {
 async fn test_sign_up_and_token_storage() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
+    let client = Arc::new(BetterAuthNativeClient::new(
+        base_url,
+        Arc::clone(&storage) as Arc<dyn TokenStorage>,
+    ));
 
     assert!(storage.get_token().unwrap().is_none());
 
@@ -63,11 +66,18 @@ async fn test_sign_up_and_token_storage() {
     assert_eq!(res.user.email, "gpui@example.com");
 
     // 2. Token must now be persisted in storage automatically
-    let stored_token = storage.get_token().unwrap().expect("Token should be in storage");
+    let stored_token = storage
+        .get_token()
+        .unwrap()
+        .expect("Token should be in storage");
     assert!(!stored_token.is_empty());
 
     // 3. get_session works using the stored token
-    let session = client.get_session().await.unwrap().expect("Session should resolve");
+    let session = client
+        .get_session()
+        .await
+        .unwrap()
+        .expect("Session should resolve");
     assert_eq!(session.user.email, "gpui@example.com");
 }
 
@@ -83,7 +93,12 @@ async fn test_session_restoration_on_fresh_client_instance() {
             Arc::clone(&storage) as Arc<dyn TokenStorage>,
         ));
         client1
-            .sign_up_email("Persist User", "persist@example.com", "mypassword123", Some(true))
+            .sign_up_email(
+                "Persist User",
+                "persist@example.com",
+                "mypassword123",
+                Some(true),
+            )
             .await
             .unwrap();
     }
@@ -110,10 +125,18 @@ async fn test_session_restoration_on_fresh_client_instance() {
 async fn test_sign_out_clears_local_keyring_and_server_session() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
+    let client = Arc::new(BetterAuthNativeClient::new(
+        base_url,
+        Arc::clone(&storage) as Arc<dyn TokenStorage>,
+    ));
 
     client
-        .sign_up_email("Signout User", "signout@example.com", "mypassword123", Some(true))
+        .sign_up_email(
+            "Signout User",
+            "signout@example.com",
+            "mypassword123",
+            Some(true),
+        )
         .await
         .unwrap();
 
@@ -134,11 +157,19 @@ async fn test_sign_out_clears_local_keyring_and_server_session() {
 async fn test_loopback_listener_and_ott_exchange() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(base_url.clone(), Arc::clone(&storage) as Arc<dyn TokenStorage>));
+    let client = Arc::new(BetterAuthNativeClient::new(
+        base_url.clone(),
+        Arc::clone(&storage) as Arc<dyn TokenStorage>,
+    ));
 
     // Sign up an account
     client
-        .sign_up_email("OAuth User", "oauth@example.com", "passphrase123", Some(true))
+        .sign_up_email(
+            "OAuth User",
+            "oauth@example.com",
+            "passphrase123",
+            Some(true),
+        )
         .await
         .unwrap();
 
@@ -183,7 +214,10 @@ async fn test_loopback_listener_and_ott_exchange() {
 async fn test_auth_store_reactive_notifications() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(base_url, Arc::clone(&storage) as Arc<dyn TokenStorage>));
+    let client = Arc::new(BetterAuthNativeClient::new(
+        base_url,
+        Arc::clone(&storage) as Arc<dyn TokenStorage>,
+    ));
 
     let store = AuthStore::new(client);
 
@@ -203,7 +237,12 @@ async fn test_auth_store_reactive_notifications() {
 
     // 2. Sign up -> Authenticated -> notification 2
     store
-        .sign_up_email("Reactive", "reactive@example.com", "secretpass123", Some(true))
+        .sign_up_email(
+            "Reactive",
+            "reactive@example.com",
+            "secretpass123",
+            Some(true),
+        )
         .await
         .unwrap();
 
@@ -227,7 +266,12 @@ async fn test_native_client_admin_operations_and_impersonation() {
     let store = AuthStore::new(Arc::clone(&client));
 
     let admin_signup = client
-        .sign_up_email("Native Admin", "native_admin@example.com", "adminpass123", Some(true))
+        .sign_up_email(
+            "Native Admin",
+            "native_admin@example.com",
+            "adminpass123",
+            Some(true),
+        )
         .await
         .unwrap();
 

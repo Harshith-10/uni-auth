@@ -1,13 +1,13 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 
-use auth_core::{AuthError, OneTimeTokenServiceExt};
-use auth_proto::OneTimeTokenVerifyRequest;
 use crate::error_to_response;
 use crate::extract::CurrentSession;
 use crate::state::AuthState;
+use auth_core::{AuthError, OneTimeTokenServiceExt};
+use auth_proto::OneTimeTokenVerifyRequest;
 
 pub async fn generate_one_time_token(
     State(state): State<AuthState>,

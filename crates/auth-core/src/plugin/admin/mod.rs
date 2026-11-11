@@ -11,7 +11,9 @@ use crate::access::AdminConfig;
 use crate::adapter::{AuthAdapter, BoxFuture};
 use crate::error::AuthError;
 use crate::models::{AdminUpdateUserFields, CreateSessionInput, CreateUserInput};
-use crate::plugin::{BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookOutcome, PluginMigration};
+use crate::plugin::{
+    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookOutcome, PluginMigration,
+};
 use crate::service::AuthService;
 
 pub mod service;
@@ -111,11 +113,7 @@ impl BetterAuthPlugin for AdminPlugin {
     ) -> BoxFuture<'a, Result<(), AuthError>> {
         // Filter out impersonated sessions from GET /list-sessions response
         if let Some(serde_json::Value::Array(ref mut sessions)) = ctx.response_body {
-            sessions.retain(|s| {
-                s.get("impersonatedBy")
-                    .map(|v| v.is_null())
-                    .unwrap_or(true)
-            });
+            sessions.retain(|s| s.get("impersonatedBy").map(|v| v.is_null()).unwrap_or(true));
         }
         Box::pin(async { Ok(()) })
     }

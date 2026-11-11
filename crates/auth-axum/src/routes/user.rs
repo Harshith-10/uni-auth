@@ -1,12 +1,12 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 
-use auth_proto::{DeleteUserRequest, UpdateUserRequest};
 use crate::error_to_response;
 use crate::extract::CurrentSession;
 use crate::state::AuthState;
+use auth_proto::{DeleteUserRequest, UpdateUserRequest};
 
 /// `POST /api/auth/update-user`
 pub async fn update_user(

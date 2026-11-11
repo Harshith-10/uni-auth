@@ -217,7 +217,13 @@ impl<'a> AdminService<'a> {
             }
         }
 
-        if self.service.adapter().find_user_by_email(&email).await?.is_some() {
+        if self
+            .service
+            .adapter()
+            .find_user_by_email(&email)
+            .await?
+            .is_some()
+        {
             return Err(AuthError::bad_request(
                 error_codes::USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL,
                 "User already exists. Use another email.",
@@ -405,7 +411,12 @@ impl<'a> AdminService<'a> {
                 if !normalized.contains('@') || !normalized.contains('.') {
                     return Err(AuthError::InvalidEmail);
                 }
-                if let Some(existing) = self.service.adapter().find_user_by_email(&normalized).await? {
+                if let Some(existing) = self
+                    .service
+                    .adapter()
+                    .find_user_by_email(&normalized)
+                    .await?
+                {
                     if existing.id != req.user_id {
                         return Err(AuthError::bad_request(
                             error_codes::USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL,
@@ -448,7 +459,10 @@ impl<'a> AdminService<'a> {
             })?;
 
         if fields.banned == Some(true) {
-            self.service.adapter().delete_sessions_by_user_id(&req.user_id).await?;
+            self.service
+                .adapter()
+                .delete_sessions_by_user_id(&req.user_id)
+                .await?;
         }
 
         Ok(updated.to_wire())
@@ -506,7 +520,11 @@ impl<'a> AdminService<'a> {
             "You are not allowed to list users sessions",
         )?;
 
-        let records = self.service.adapter().list_sessions_by_user_id(target_user_id).await?;
+        let records = self
+            .service
+            .adapter()
+            .list_sessions_by_user_id(target_user_id)
+            .await?;
         Ok(AdminListUserSessionsResponse {
             sessions: records.into_iter().map(|s| s.to_wire()).collect(),
         })
@@ -526,7 +544,13 @@ impl<'a> AdminService<'a> {
             "You are not allowed to ban users",
         )?;
 
-        if self.service.adapter().find_user_by_id(&req.user_id).await?.is_none() {
+        if self
+            .service
+            .adapter()
+            .find_user_by_id(&req.user_id)
+            .await?
+            .is_none()
+        {
             return Err(AuthError::UserNotFound);
         }
 
@@ -561,7 +585,10 @@ impl<'a> AdminService<'a> {
             )
             .await?;
 
-        self.service.adapter().delete_sessions_by_user_id(&req.user_id).await?;
+        self.service
+            .adapter()
+            .delete_sessions_by_user_id(&req.user_id)
+            .await?;
 
         Ok(AdminUserResponse {
             user: updated.to_wire(),
@@ -690,25 +717,28 @@ impl<'a> AdminService<'a> {
             .await?
             .ok_or_else(|| AuthError::Internal("Failed to find admin user".to_string()))?;
 
-        let tok_str = admin_token_or_signed.ok_or_else(|| {
-            AuthError::Internal("Failed to find admin session".to_string())
-        })?;
+        let tok_str = admin_token_or_signed
+            .ok_or_else(|| AuthError::Internal("Failed to find admin session".to_string()))?;
 
         let clean = tok_str.split(':').next().unwrap_or(tok_str);
-        let raw = self.service.verify_signed_token(clean).ok_or_else(|| {
-            AuthError::Internal("Failed to find admin session".to_string())
-        })?;
+        let raw = self
+            .service
+            .verify_signed_token(clean)
+            .ok_or_else(|| AuthError::Internal("Failed to find admin session".to_string()))?;
 
         let admin_session = match self.service.adapter().find_session_by_token(&raw).await? {
             Some(s) if s.user_id == admin_user.id && !s.is_expired() => s,
             _ => {
                 return Err(AuthError::Internal(
                     "Failed to find admin session".to_string(),
-                ))
+                ));
             }
         };
 
-        self.service.adapter().delete_session(&current_session.token).await?;
+        self.service
+            .adapter()
+            .delete_session(&current_session.token)
+            .await?;
 
         Ok(SessionAndUserResponse {
             session: admin_session.to_wire(),
@@ -753,7 +783,10 @@ impl<'a> AdminService<'a> {
             "You are not allowed to revoke users sessions",
         )?;
 
-        self.service.adapter().delete_sessions_by_user_id(target_user_id).await?;
+        self.service
+            .adapter()
+            .delete_sessions_by_user_id(target_user_id)
+            .await?;
         Ok(AdminSuccessResponse::ok())
     }
 
@@ -778,11 +811,20 @@ impl<'a> AdminService<'a> {
             ));
         }
 
-        if self.service.adapter().find_user_by_id(target_user_id).await?.is_none() {
+        if self
+            .service
+            .adapter()
+            .find_user_by_id(target_user_id)
+            .await?
+            .is_none()
+        {
             return Err(AuthError::UserNotFound);
         }
 
-        self.service.adapter().delete_sessions_by_user_id(target_user_id).await?;
+        self.service
+            .adapter()
+            .delete_sessions_by_user_id(target_user_id)
+            .await?;
         self.service.adapter().delete_user(target_user_id).await?;
         self.service.notify_user_deleted(target_user_id).await;
 
@@ -821,7 +863,12 @@ impl<'a> AdminService<'a> {
             .await
             .map_err(AuthError::Crypto)?;
 
-        if self.service.find_credential_account(&user.id).await?.is_some() {
+        if self
+            .service
+            .find_credential_account(&user.id)
+            .await?
+            .is_some()
+        {
             self.service
                 .adapter()
                 .update_account_password(&user.id, &password_hash)
@@ -854,15 +901,12 @@ impl<'a> AdminService<'a> {
         actor: Option<&UserWire>,
         req: AdminHasPermissionRequest,
     ) -> Result<AdminPermissionResponse, AuthError> {
-        let perms = req
-            .permissions
-            .or(req.permission)
-            .ok_or_else(|| {
-                AuthError::bad_request(
-                    "INVALID_PERMISSION_CHECK",
-                    "invalid permission check. no permission(s) were passed.",
-                )
-            })?;
+        let perms = req.permissions.or(req.permission).ok_or_else(|| {
+            AuthError::bad_request(
+                "INVALID_PERMISSION_CHECK",
+                "invalid permission check. no permission(s) were passed.",
+            )
+        })?;
 
         let (resolved_user_id, resolved_role) = if let Some(role) = req.role {
             (req.user_id, Some(role))
@@ -872,7 +916,9 @@ impl<'a> AdminService<'a> {
                 .adapter()
                 .find_user_by_id(&uid)
                 .await?
-                .ok_or_else(|| AuthError::bad_request(error_codes::USER_NOT_FOUND, "user not found"))?;
+                .ok_or_else(|| {
+                    AuthError::bad_request(error_codes::USER_NOT_FOUND, "user not found")
+                })?;
             (Some(user.id), user.role)
         } else if let Some(act) = actor {
             (Some(act.id.clone()), act.role.clone())

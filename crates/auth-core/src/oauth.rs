@@ -122,8 +122,11 @@ impl OAuthHttpClient for ReqwestOAuthClient {
     ) -> BoxFuture<'a, Result<OAuthProfileResult, String>> {
         Box::pin(async move {
             // Allow deterministic mock/simulated mode when token_url starts with "mock://" or in local test fixtures
-            if provider.token_url.starts_with("mock://") || provider.token_url.contains("127.0.0.1:0") {
-                let unverified = provider.token_url.contains("unverified") || code.contains("unverified");
+            if provider.token_url.starts_with("mock://")
+                || provider.token_url.contains("127.0.0.1:0")
+            {
+                let unverified =
+                    provider.token_url.contains("unverified") || code.contains("unverified");
                 let suffix = if let Some(rest) = code.strip_prefix("fixed_") {
                     rest.to_lowercase()
                 } else {
@@ -225,7 +228,9 @@ impl OAuthHttpClient for ReqwestOAuthClient {
                     serde_json::Value::Number(n) => n.to_string(),
                     other => other.to_string(),
                 })
-                .ok_or_else(|| "Missing user ID ('sub' or 'id') in userinfo response".to_string())?;
+                .ok_or_else(|| {
+                    "Missing user ID ('sub' or 'id') in userinfo response".to_string()
+                })?;
 
             let email = profile
                 .get("email")

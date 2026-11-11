@@ -8,9 +8,9 @@ pub mod social;
 pub mod user;
 pub mod verification;
 
+use axum::Router;
 use axum::extract::FromRef;
 use axum::routing::{get, post};
-use axum::Router;
 
 use crate::state::AuthState;
 
@@ -83,7 +83,8 @@ pub fn auth_routes_with_plugins(state: &AuthState) -> Router<AuthState> {
     let mut router = auth_routes::<AuthState>();
 
     // Dynamically mount AdminPlugin router if registered on AuthService and not already in axum_plugins
-    let mut plugins: Vec<std::sync::Arc<dyn crate::plugin::AxumAuthPlugin>> = (*state.axum_plugins).clone();
+    let mut plugins: Vec<std::sync::Arc<dyn crate::plugin::AxumAuthPlugin>> =
+        (*state.axum_plugins).clone();
     if let Some(admin_plugin) = state.service.get_plugin::<auth_core::AdminPlugin>() {
         if !plugins.iter().any(|p| p.plugin_id() == "admin") {
             plugins.push(std::sync::Arc::new(admin_plugin.clone()));

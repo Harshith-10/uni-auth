@@ -1,7 +1,7 @@
 //! Reactive authentication store with observable state transitions for desktop UI integration.
 
-use std::sync::{Arc, Mutex, RwLock};
 use auth_proto::{SessionAndUserResponse, SessionWire, UserWire};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::client::{BetterAuthNativeClient, ClientError};
 

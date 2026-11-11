@@ -2,7 +2,7 @@ use std::sync::Arc;
 use time::Duration;
 use tokio::net::TcpListener;
 
-use auth_axum::{auth_router, AuthState, OAuthProviderConfig};
+use auth_axum::{AuthState, OAuthProviderConfig, auth_router};
 use auth_core::models::{AdminUpdateUserFields, CreateUserInput};
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
 use auth_proto::{
@@ -51,11 +51,7 @@ async fn test_ok_endpoint() {
     let (base_url, _) = start_test_server().await;
     let client = reqwest::Client::new();
 
-    let res = client
-        .get(format!("{base_url}/ok"))
-        .send()
-        .await
-        .unwrap();
+    let res = client.get(format!("{base_url}/ok")).send().await.unwrap();
 
     assert_eq!(res.status(), 200);
     let body: OkResponse = res.json().await.unwrap();
@@ -268,12 +264,7 @@ async fn test_oauth_callback_redirect_hygiene_and_unverified_email_protection() 
         .await
         .unwrap();
     assert_eq!(cb_web.status(), 307);
-    let loc_web = cb_web
-        .headers()
-        .get("location")
-        .unwrap()
-        .to_str()
-        .unwrap();
+    let loc_web = cb_web.headers().get("location").unwrap().to_str().unwrap();
     assert_eq!(loc_web, "http://localhost:5173");
 
     // 2. Desktop loopback redirect (/auth/callback) MUST append ?token=<ott>

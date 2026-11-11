@@ -1,7 +1,7 @@
 //! Security middleware utilities for CSRF Origin validation and rate limiting.
 
-use axum::http::HeaderMap;
 use auth_core::AuthError;
+use axum::http::HeaderMap;
 
 /// Validates the `Origin` (or `Referer`) header against a list of trusted origins.
 ///
@@ -23,9 +23,12 @@ pub fn verify_trusted_origin(
             .trim()
             .trim_end_matches('/');
 
-        let allowed = trusted_origins
-            .iter()
-            .any(|trusted| trusted.trim().trim_end_matches('/').eq_ignore_ascii_case(origin_str));
+        let allowed = trusted_origins.iter().any(|trusted| {
+            trusted
+                .trim()
+                .trim_end_matches('/')
+                .eq_ignore_ascii_case(origin_str)
+        });
 
         if !allowed {
             return Err(AuthError::InvalidOrigin);

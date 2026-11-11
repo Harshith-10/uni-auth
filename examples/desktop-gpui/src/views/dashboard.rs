@@ -6,20 +6,22 @@ use gpui_kit::component::dialog::{
 };
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     alert::Alert,
     avatar::Avatar,
     button::Button,
     form::Field,
+    h_flex,
     input::Input,
     table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow},
     tag::Tag,
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
+    v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, px, Anchor, AnyElement, App, ClickEvent, ClipboardItem, Context, InteractiveElement as _,
+    Anchor, AnyElement, App, ClickEvent, ClipboardItem, Context, InteractiveElement as _,
     IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Window,
+    Window, div, px,
 };
 
 use crate::app::{DashboardTab, DesktopAuthApp};
@@ -55,10 +57,14 @@ impl DashboardView {
         let impersonated_by = session.impersonated_by.clone();
 
         let tab_content: AnyElement = match app.active_tab {
-            DashboardTab::Overview => Self::render_overview(app, user, session, cx).into_any_element(),
+            DashboardTab::Overview => {
+                Self::render_overview(app, user, session, cx).into_any_element()
+            }
             DashboardTab::Sessions => Self::render_sessions(app, session, cx).into_any_element(),
             DashboardTab::Admin => Self::render_admin(app, user, cx).into_any_element(),
-            DashboardTab::Diagnostics => Self::render_diagnostics(app, session, cx).into_any_element(),
+            DashboardTab::Diagnostics => {
+                Self::render_diagnostics(app, session, cx).into_any_element()
+            }
         };
 
         let app_view = cx.entity().clone();
@@ -118,7 +124,13 @@ impl DashboardView {
                                         h_flex()
                                             .justify_between()
                                             .items_center()
-                                            .child(div().text_xs().font_medium().text_color(muted_fg).child("Account Identity"))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_medium()
+                                                    .text_color(muted_fg)
+                                                    .child("Account Identity"),
+                                            )
                                             .child(if user.email_verified {
                                                 Tag::success().small().outline().child("Verified")
                                             } else {
@@ -157,12 +169,10 @@ impl DashboardView {
                                                     ),
                                             ),
                                     )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted_fg)
-                                            .child(format!("UID: {}...", &user.id[..10.min(user.id.len())])),
-                                    ),
+                                    .child(div().text_xs().text_color(muted_fg).child(format!(
+                                        "UID: {}...",
+                                        &user.id[..10.min(user.id.len())]
+                                    ))),
                             ),
                     )
                     // 2. Role & Permissions
@@ -182,25 +192,31 @@ impl DashboardView {
                                         h_flex()
                                             .justify_between()
                                             .items_center()
-                                            .child(div().text_xs().font_medium().text_color(muted_fg).child("Role & Access"))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_medium()
+                                                    .text_color(muted_fg)
+                                                    .child("Role & Access"),
+                                            )
                                             .child(if is_admin {
                                                 Tag::primary().small().child("admin")
                                             } else {
                                                 Tag::secondary().small().child("user")
                                             }),
                                     )
-                                    .child(
-                                        div()
-                                            .font_bold()
-                                            .text_sm()
-                                            .child(if is_admin { "Administrator" } else { "Standard Member" }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted_fg)
-                                            .child(if is_admin { "Full admin API privileges" } else { "Tenant standard profile" }),
-                                    ),
+                                    .child(div().font_bold().text_sm().child(if is_admin {
+                                        "Administrator"
+                                    } else {
+                                        "Standard Member"
+                                    }))
+                                    .child(div().text_xs().text_color(muted_fg).child(
+                                        if is_admin {
+                                            "Full admin API privileges"
+                                        } else {
+                                            "Tenant standard profile"
+                                        },
+                                    )),
                             ),
                     )
                     // 3. Session Transport
@@ -220,21 +236,25 @@ impl DashboardView {
                                         h_flex()
                                             .justify_between()
                                             .items_center()
-                                            .child(div().text_xs().font_medium().text_color(muted_fg).child("Auth Transport"))
-                                            .child(Tag::info().small().outline().child("Keyring Bearer")),
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_medium()
+                                                    .text_color(muted_fg)
+                                                    .child("Auth Transport"),
+                                            )
+                                            .child(
+                                                Tag::info()
+                                                    .small()
+                                                    .outline()
+                                                    .child("Keyring Bearer"),
+                                            ),
                                     )
-                                    .child(
-                                        div()
-                                            .font_bold()
-                                            .text_sm()
-                                            .child("OS Keychain Token"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted_fg)
-                                            .child(format!("SID: {}...", &session.id[..10.min(session.id.len())])),
-                                    ),
+                                    .child(div().font_bold().text_sm().child("OS Keychain Token"))
+                                    .child(div().text_xs().text_color(muted_fg).child(format!(
+                                        "SID: {}...",
+                                        &session.id[..10.min(session.id.len())]
+                                    ))),
                             ),
                     )
                     // 4. Connected Devices
@@ -254,15 +274,27 @@ impl DashboardView {
                                         h_flex()
                                             .justify_between()
                                             .items_center()
-                                            .child(div().text_xs().font_medium().text_color(muted_fg).child("Active Devices"))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_medium()
+                                                    .text_color(muted_fg)
+                                                    .child("Active Devices"),
+                                            )
                                             .child(
                                                 Button::new("manage-devices-btn")
                                                     .ghost()
                                                     .small()
                                                     .label("Manage")
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.set_tab(DashboardTab::Sessions, window, cx);
-                                                    })),
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.set_tab(
+                                                                DashboardTab::Sessions,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
                                             ),
                                     )
                                     .child(
@@ -607,18 +639,13 @@ impl DashboardView {
                             .child(
                                 v_flex()
                                     .gap_0p5()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_semibold()
-                                            .child(format!("Active Sessions ({})", app.active_sessions.len())),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted_fg)
-                                            .child("Manage devices currently signed into your account"),
-                                    ),
+                                    .child(div().text_sm().font_semibold().child(format!(
+                                        "Active Sessions ({})",
+                                        app.active_sessions.len()
+                                    )))
+                                    .child(div().text_xs().text_color(muted_fg).child(
+                                        "Manage devices currently signed into your account",
+                                    )),
                             )
                             .child(
                                 Button::new("refresh-sessions-btn")
@@ -652,11 +679,40 @@ impl DashboardView {
                             .child(
                                 TableHeader::new().child(
                                     TableRow::new()
-                                        .child(TableHead::new().w(px(130.)).min_w(px(130.)).flex_shrink_0().child("Session ID"))
-                                        .child(TableHead::new().min_w(px(160.)).child("Client Device / User Agent"))
-                                        .child(TableHead::new().w(px(150.)).min_w(px(150.)).flex_shrink_0().child("Expires"))
-                                        .child(TableHead::new().w(px(120.)).min_w(px(120.)).flex_shrink_0().child("Status"))
-                                        .child(TableHead::new().w(px(90.)).min_w(px(90.)).flex_shrink_0().text_right().child("Action")),
+                                        .child(
+                                            TableHead::new()
+                                                .w(px(130.))
+                                                .min_w(px(130.))
+                                                .flex_shrink_0()
+                                                .child("Session ID"),
+                                        )
+                                        .child(
+                                            TableHead::new()
+                                                .min_w(px(160.))
+                                                .child("Client Device / User Agent"),
+                                        )
+                                        .child(
+                                            TableHead::new()
+                                                .w(px(150.))
+                                                .min_w(px(150.))
+                                                .flex_shrink_0()
+                                                .child("Expires"),
+                                        )
+                                        .child(
+                                            TableHead::new()
+                                                .w(px(120.))
+                                                .min_w(px(120.))
+                                                .flex_shrink_0()
+                                                .child("Status"),
+                                        )
+                                        .child(
+                                            TableHead::new()
+                                                .w(px(90.))
+                                                .min_w(px(90.))
+                                                .flex_shrink_0()
+                                                .text_right()
+                                                .child("Action"),
+                                        ),
                                 ),
                             )
                             .child(
@@ -664,7 +720,8 @@ impl DashboardView {
                                     let s_id = s.id.clone();
                                     let s_token = s.token.clone();
                                     let is_current = s.id == session.id;
-                                    let ua = s.user_agent.as_deref().unwrap_or("Desktop Native App");
+                                    let ua =
+                                        s.user_agent.as_deref().unwrap_or("Desktop Native App");
                                     let ip = s.ip_address.as_deref().unwrap_or("127.0.0.1");
                                     let exp_date = Self::format_time(&s.expires_at);
 
@@ -682,41 +739,42 @@ impl DashboardView {
                                                         .whitespace_nowrap()
                                                         .text_ellipsis()
                                                         .text_xs()
-                                                        .child(format!("{}...", &s.id[..8.min(s.id.len())])),
+                                                        .child(format!(
+                                                            "{}...",
+                                                            &s.id[..8.min(s.id.len())]
+                                                        )),
                                                 ),
                                         )
                                         .child(
-                                            TableCell::new()
-                                                .min_w(px(160.))
-                                                .child(
-                                                    v_flex()
-                                                        .w_full()
-                                                        .min_w_0()
-                                                        .overflow_hidden()
-                                                        .gap_0()
-                                                        .child(
-                                                            div()
-                                                                .w_full()
-                                                                .min_w_0()
-                                                                .overflow_hidden()
-                                                                .font_medium()
-                                                                .text_xs()
-                                                                .whitespace_nowrap()
-                                                                .text_ellipsis()
-                                                                .child(ua.to_string()),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .w_full()
-                                                                .min_w_0()
-                                                                .overflow_hidden()
-                                                                .text_xs()
-                                                                .text_color(muted_fg)
-                                                                .whitespace_nowrap()
-                                                                .text_ellipsis()
-                                                                .child(format!("IP: {ip}")),
-                                                        ),
-                                                ),
+                                            TableCell::new().min_w(px(160.)).child(
+                                                v_flex()
+                                                    .w_full()
+                                                    .min_w_0()
+                                                    .overflow_hidden()
+                                                    .gap_0()
+                                                    .child(
+                                                        div()
+                                                            .w_full()
+                                                            .min_w_0()
+                                                            .overflow_hidden()
+                                                            .font_medium()
+                                                            .text_xs()
+                                                            .whitespace_nowrap()
+                                                            .text_ellipsis()
+                                                            .child(ua.to_string()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .w_full()
+                                                            .min_w_0()
+                                                            .overflow_hidden()
+                                                            .text_xs()
+                                                            .text_color(muted_fg)
+                                                            .whitespace_nowrap()
+                                                            .text_ellipsis()
+                                                            .child(format!("IP: {ip}")),
+                                                    ),
+                                            ),
                                         )
                                         .child(
                                             TableCell::new()
@@ -758,9 +816,15 @@ impl DashboardView {
                                                         .danger()
                                                         .small()
                                                         .outline()
-                                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                                            this.revoke_session(s_token.clone(), window, cx);
-                                                        })),
+                                                        .on_click(cx.listener(
+                                                            move |this, _, window, cx| {
+                                                                this.revoke_session(
+                                                                    s_token.clone(),
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        )),
                                                 ),
                                         )
                                 })),
@@ -781,8 +845,16 @@ impl DashboardView {
         let muted_fg = cx.theme().muted_foreground;
         let radius = cx.theme().radius;
 
-        let admin_count = app.admin_users.iter().filter(|u| u.role.as_deref() == Some("admin")).count();
-        let banned_count = app.admin_users.iter().filter(|u| u.banned.unwrap_or(false)).count();
+        let admin_count = app
+            .admin_users
+            .iter()
+            .filter(|u| u.role.as_deref() == Some("admin"))
+            .count();
+        let banned_count = app
+            .admin_users
+            .iter()
+            .filter(|u| u.banned.unwrap_or(false))
+            .count();
         let verified_count = app.admin_users.iter().filter(|u| u.email_verified).count();
 
         // Create User Modal Dialog (matching Image 2)

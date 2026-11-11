@@ -1,15 +1,13 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::Json;
 use serde::Deserialize;
 
-use auth_proto::{
-    ChangePasswordRequest, RequestPasswordResetRequest, ResetPasswordRequest,
-};
 use crate::error_to_response;
 use crate::extract::FreshSession;
 use crate::state::AuthState;
+use auth_proto::{ChangePasswordRequest, RequestPasswordResetRequest, ResetPasswordRequest};
 
 pub async fn request_password_reset(
     State(state): State<AuthState>,
@@ -42,7 +40,8 @@ pub async fn reset_password_callback(
         }
         _ => {
             let separator = if callback.contains('?') { "&" } else { "?" };
-            Redirect::temporary(&format!("{callback}{separator}error=INVALID_TOKEN")).into_response()
+            Redirect::temporary(&format!("{callback}{separator}error=INVALID_TOKEN"))
+                .into_response()
         }
     }
 }

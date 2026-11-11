@@ -1,12 +1,12 @@
-use axum::extract::State;
-use axum::http::{header, HeaderMap, Method, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use axum::extract::State;
+use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 
-use auth_proto::{error_codes, AuthErrorResponse, RevokeSessionRequest};
 use crate::error_to_response;
-use crate::extract::{extract_token_from_headers, CurrentSession};
+use crate::extract::{CurrentSession, extract_token_from_headers};
 use crate::state::AuthState;
+use auth_proto::{AuthErrorResponse, RevokeSessionRequest, error_codes};
 
 pub async fn get_session(
     State(state): State<AuthState>,
@@ -75,7 +75,11 @@ pub async fn revoke_session(
     current_session: CurrentSession,
     Json(payload): Json<RevokeSessionRequest>,
 ) -> Response {
-    match state.service.revoke_session(&current_session.user.id, &payload.token).await {
+    match state
+        .service
+        .revoke_session(&current_session.user.id, &payload.token)
+        .await
+    {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),
         Err(err) => error_to_response(err),
     }
@@ -85,7 +89,11 @@ pub async fn revoke_sessions(
     State(state): State<AuthState>,
     current_session: CurrentSession,
 ) -> Response {
-    match state.service.revoke_sessions(&current_session.user.id).await {
+    match state
+        .service
+        .revoke_sessions(&current_session.user.id)
+        .await
+    {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),
         Err(err) => error_to_response(err),
     }

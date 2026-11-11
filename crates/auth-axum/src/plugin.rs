@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::Router;
 
 use auth_core::plugin::EndpointHookContext;
 use auth_core::{AdminPlugin, BearerPlugin, OneTimeTokenPlugin};

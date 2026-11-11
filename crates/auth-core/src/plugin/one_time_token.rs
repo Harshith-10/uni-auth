@@ -3,8 +3,8 @@
 //! Supports browser-to-desktop handoff with single-use atomic consumption, optional SHA-256 token hashing,
 //! configurable expiration, and automatic `set-ott` header issuance on new sessions.
 
-use std::any::Any;
 use sha2::{Digest, Sha256};
+use std::any::Any;
 use time::{Duration, OffsetDateTime};
 
 use auth_proto::{OneTimeTokenGenerateResponse, SessionAndUserResponse};
@@ -166,9 +166,7 @@ impl BetterAuthPlugin for OneTimeTokenPlugin {
         let adapter = service.adapter().clone();
 
         Box::pin(async move {
-            let res = plugin
-                .generate_token(&session_token, &*adapter)
-                .await?;
+            let res = plugin.generate_token(&session_token, &*adapter).await?;
 
             ctx.response_headers
                 .insert("set-ott".to_string(), res.token);

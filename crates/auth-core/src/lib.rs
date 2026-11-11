@@ -25,9 +25,7 @@ pub use access::{AccessControl, AdminConfig, Connector, RolePermissions};
 pub use adapter::{AuthAdapter, InMemoryAuthAdapter};
 pub use email::{EmailSender, MockEmailSender, NoopEmailSender};
 pub use error::{AdapterError, AuthError};
-pub use hooks::{
-    spawn_expired_cleanup_worker, AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter,
-};
+pub use hooks::{AuthHooks, NoopAuthHooks, SlidingWindowRateLimiter, spawn_expired_cleanup_worker};
 pub use models::*;
 pub use oauth::{
     OAuthHttpClient, OAuthProfileResult, OAuthProviderConfig, OAuthStateData, ReqwestOAuthClient,

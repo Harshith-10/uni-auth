@@ -2,13 +2,10 @@ use auth_client::AuthStatus;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::{
-    avatar::Avatar,
-    button::Button,
-    tag::Tag,
-    ActiveTheme as _, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Sizable as _, avatar::Avatar, button::Button, h_flex, tag::Tag, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{div, Context, IntoElement, ParentElement as _, Styled as _};
+use gpui_kit::{Context, IntoElement, ParentElement as _, Styled as _, div};
 
 use crate::app::DesktopAuthApp;
 
@@ -79,12 +76,7 @@ impl NavbarView {
                             .rounded_md()
                             .bg(muted)
                             .child(div().size_2().rounded_full().bg(success))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted_fg)
-                                    .child("localhost:3000"),
-                            ),
+                            .child(div().text_xs().text_color(muted_fg).child("localhost:3000")),
                     ),
             )
             // Right Side Profile / Action

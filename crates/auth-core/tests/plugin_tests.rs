@@ -1,8 +1,8 @@
 //! Integration tests for Better Auth server plugin ecosystem, database hooks, and plugin downcasting.
 
 use std::any::Any;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use auth_core::adapter::{AuthAdapter, BoxFuture};
 use auth_core::error::AuthError;
@@ -67,7 +67,10 @@ impl DatabaseHooks for CustomHooks {
         let reject = self.reject_session_with_banned.load(Ordering::SeqCst);
         Box::pin(async move {
             if reject {
-                return Err(AuthError::forbidden("BANNED_USER", "User is banned from issuing sessions"));
+                return Err(AuthError::forbidden(
+                    "BANNED_USER",
+                    "User is banned from issuing sessions",
+                ));
             }
             Ok(HookOutcome::Continue(input))
         })
@@ -253,7 +256,9 @@ async fn test_database_hooks_session_creation_rejection() {
         .unwrap();
 
     // Now enable session rejection in hooks
-    hooks.reject_session_with_banned.store(true, Ordering::SeqCst);
+    hooks
+        .reject_session_with_banned
+        .store(true, Ordering::SeqCst);
 
     let session_res = service
         .adapter()
@@ -436,11 +441,13 @@ async fn test_bearer_plugin_before_and_after_endpoint() {
         after_ctx.response_headers.get("set-auth-token").unwrap(),
         raw_token
     );
-    assert!(after_ctx
-        .response_headers
-        .get("access-control-expose-headers")
-        .unwrap()
-        .contains("set-auth-token"));
+    assert!(
+        after_ctx
+            .response_headers
+            .get("access-control-expose-headers")
+            .unwrap()
+            .contains("set-auth-token")
+    );
 
     // 4. Cleared cookie (Max-Age=0) must NOT emit set-auth-token
     let mut clear_ctx = EndpointHookContext {
@@ -548,9 +555,11 @@ async fn test_one_time_token_plugin_atomic_consumption_and_hashing() {
 
     let ott_header = session_ctx.response_headers.get("set-ott");
     assert!(ott_header.is_some());
-    assert!(session_ctx
-        .response_headers
-        .get("access-control-expose-headers")
-        .unwrap()
-        .contains("set-ott"));
+    assert!(
+        session_ctx
+            .response_headers
+            .get("access-control-expose-headers")
+            .unwrap()
+            .contains("set-ott")
+    );
 }

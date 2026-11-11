@@ -9,11 +9,11 @@
 //! - Cryptographically secure token generation (`rand::rngs::OsRng`).
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -415,9 +415,11 @@ mod tests {
 
         assert!(hash.starts_with("$argon2"));
         assert!(verify_password(hash.clone(), password).await.unwrap());
-        assert!(!verify_password(hash, "wrong-password".to_string())
-            .await
-            .unwrap());
+        assert!(
+            !verify_password(hash, "wrong-password".to_string())
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

@@ -5,16 +5,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 
+use auth_core::AuthAdapter;
 use auth_core::access::{AdminConfig, Connector, RolePermissions};
 use auth_core::adapter::InMemoryAuthAdapter;
 use auth_core::error::AuthError;
-use auth_core::models::{
-    AdminUpdateUserFields, CreateSessionInput, CreateUserInput, RequestMeta,
-};
+use auth_core::models::{AdminUpdateUserFields, CreateSessionInput, CreateUserInput, RequestMeta};
 use auth_core::plugin::admin::{AdminPlugin, AdminServiceExt};
 use auth_core::plugin::{BetterAuthPlugin, EndpointHookContext};
 use auth_core::service::{AuthConfig, AuthService};
-use auth_core::AuthAdapter;
 use auth_proto::{AdminBanUserRequest, AdminHasPermissionRequest, AdminSetRoleRequest, RoleValue};
 
 fn setup_test_service() -> (Arc<AuthService>, Arc<InMemoryAuthAdapter>) {
@@ -93,10 +91,20 @@ fn test_admin_has_permission_with_connector() {
     );
 
     // AND -> false (admin cannot fly to moon)
-    assert!(!config.has_permission_map_with_connector(None, Some("admin"), &requested, Connector::And));
+    assert!(!config.has_permission_map_with_connector(
+        None,
+        Some("admin"),
+        &requested,
+        Connector::And
+    ));
 
     // OR -> true (admin can delete)
-    assert!(config.has_permission_map_with_connector(None, Some("admin"), &requested, Connector::Or));
+    assert!(config.has_permission_map_with_connector(
+        None,
+        Some("admin"),
+        &requested,
+        Connector::Or
+    ));
 }
 
 #[tokio::test]
@@ -104,7 +112,9 @@ async fn test_admin_service_ext_operations() {
     let (service, adapter) = setup_test_service();
 
     // 1. service.admin() downcasting succeeds
-    let admin_svc = service.admin().expect("AdminPlugin should be registered by default");
+    let admin_svc = service
+        .admin()
+        .expect("AdminPlugin should be registered by default");
 
     // Create an admin actor and a regular user
     let admin_user = adapter
@@ -233,7 +243,10 @@ async fn test_database_hook_auto_unban_on_expired_ban() {
         })
         .await;
 
-    assert!(session_result.is_ok(), "Session creation should succeed after auto-unban");
+    assert!(
+        session_result.is_ok(),
+        "Session creation should succeed after auto-unban"
+    );
 
     // Verify user in adapter is no longer banned
     let reloaded = adapter.find_user_by_id(&user.id).await.unwrap().unwrap();
@@ -273,11 +286,7 @@ async fn test_impersonate_admin_protection() {
 
     // Admin 1 attempts to impersonate Admin 2 without "impersonate-admins" permission
     let res = admin_svc
-        .impersonate_user(
-            &admin_1.to_wire(),
-            &admin_2.id,
-            RequestMeta::default(),
-        )
+        .impersonate_user(&admin_1.to_wire(), &admin_2.id, RequestMeta::default())
         .await;
 
     assert!(res.is_err());

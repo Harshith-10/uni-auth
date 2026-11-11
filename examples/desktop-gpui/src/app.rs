@@ -4,15 +4,16 @@ use auth_client::{AuthStatus, AuthStore, ClientError};
 use auth_proto::{AdminCreateUserRequest, AdminListUsersQuery, RoleValue, SessionWire, UserWire};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::{
+    ActiveTheme as _, WindowExt as _, h_flex,
     input::{InputEvent, InputState},
     notification::Notification,
     scroll::ScrollableElement as _,
     spinner::Spinner,
-    ActiveTheme as _, WindowExt as _, h_flex, v_flex,
+    v_flex,
 };
 use gpui_kit::{
-    div, AnyElement, AppContext, Context, Entity, IntoElement, ParentElement as _, Render,
-    SharedString, Styled as _, Subscription, Window,
+    AnyElement, AppContext, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
+    Styled as _, Subscription, Window, div,
 };
 
 use crate::views::{auth::AuthFormView, dashboard::DashboardView, navbar::NavbarView};
@@ -315,11 +316,7 @@ impl DesktopAuthApp {
 
             crate::spawn_tokio(async move {
                 let req_res = client
-                    .fetch_protected::<serde_json::Value>(
-                        reqwest::Method::GET,
-                        &endpoint_url,
-                        None,
-                    )
+                    .fetch_protected::<serde_json::Value>(reqwest::Method::GET, &endpoint_url, None)
                     .await;
                 let _ = tx.send(req_res);
             });
@@ -484,8 +481,18 @@ impl DesktopAuthApp {
             return;
         }
 
-        let name = self.admin_new_name_input.read(cx).value().trim().to_string();
-        let email = self.admin_new_email_input.read(cx).value().trim().to_string();
+        let name = self
+            .admin_new_name_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let email = self
+            .admin_new_email_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         let password = self.admin_new_password_input.read(cx).value().to_string();
         let role = self.admin_new_role.clone();
 
@@ -913,13 +920,7 @@ impl Render for DesktopAuthApp {
                     .flex_1()
                     .w_full()
                     .overflow_y_scrollbar()
-                    .child(
-                        h_flex()
-                            .justify_center()
-                            .w_full()
-                            .p_6()
-                            .child(main_view),
-                    ),
+                    .child(h_flex().justify_center().w_full().p_6().child(main_view)),
             )
             .child(
                 h_flex()

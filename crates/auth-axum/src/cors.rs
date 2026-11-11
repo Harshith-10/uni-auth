@@ -3,7 +3,7 @@
 //! Exposes `set-auth-token`, `set-admin-auth-token`, and `set-ott` in `Access-Control-Expose-Headers`
 //! and allows credentials for seamless web and desktop cross-origin requests.
 
-use axum::http::{header, HeaderName, HeaderValue, Method};
+use axum::http::{HeaderName, HeaderValue, Method, header};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 /// Builds a CORS layer configured specifically for Better Auth client compatibility.

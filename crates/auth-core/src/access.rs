@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 use time::Duration;
 
-pub use auth_proto::access::{AccessControl, Connector, RolePermissions};
 use crate::error::AuthError;
+pub use auth_proto::access::{AccessControl, Connector, RolePermissions};
 
 /// Configuration for the Better Auth `admin` plugin.
 ///
@@ -62,7 +62,11 @@ impl AdminConfig {
     /// Parity with Better Auth's `admin.ts` lines 54-69.
     pub fn validate(&self) -> Result<(), AuthError> {
         for admin_role in &self.admin_roles {
-            let exists = self.ac.roles().keys().any(|r| r.eq_ignore_ascii_case(admin_role));
+            let exists = self
+                .ac
+                .roles()
+                .keys()
+                .any(|r| r.eq_ignore_ascii_case(admin_role));
             if !exists {
                 return Err(AuthError::Internal(format!(
                     "AdminConfig validation error: admin_role '{admin_role}' is not defined in AccessControl roles"
@@ -101,7 +105,11 @@ impl AdminConfig {
             return false;
         }
         let roles_str = role_csv.unwrap_or(&self.default_role);
-        for role_name in roles_str.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        for role_name in roles_str
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             if let Some(role_def) = self.ac.get_role(role_name) {
                 if role_def.authorize_with_connector(permissions, connector) {
                     return true;

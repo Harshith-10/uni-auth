@@ -2,20 +2,20 @@
 //!
 //! Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/routes.ts`
 
-use axum::extract::{Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 
+use crate::cookies::{build_clear_session_cookie, build_session_cookie};
+use crate::error_to_response;
+use crate::extract::{CurrentSession, extract_request_meta};
+use crate::state::AuthState;
 use auth_proto::{
     AdminBanUserRequest, AdminCreateUserRequest, AdminGetUserQuery, AdminHasPermissionRequest,
     AdminListUsersQuery, AdminRevokeUserSessionRequest, AdminSetRoleRequest,
     AdminSetUserPasswordRequest, AdminUpdateUserRequest, AdminUserIdRequest,
 };
-use crate::cookies::{build_clear_session_cookie, build_session_cookie};
-use crate::error_to_response;
-use crate::extract::{extract_request_meta, CurrentSession};
-use crate::state::AuthState;
 
 fn admin_cookie_name(secure: bool) -> &'static str {
     if secure {
@@ -40,8 +40,7 @@ fn extract_admin_session_token(headers: &HeaderMap) -> Option<String> {
             for part in cookie_str.split(';') {
                 if let Some((k, v)) = part.trim().split_once('=') {
                     let k = k.trim();
-                    if k == "better-auth.admin_session"
-                        || k == "__Secure-better-auth.admin_session"
+                    if k == "better-auth.admin_session" || k == "__Secure-better-auth.admin_session"
                     {
                         let val = v.trim();
                         if !val.is_empty() {
@@ -213,9 +212,7 @@ pub async fn impersonate_user(
                 response.headers_mut().append(header::SET_COOKIE, c);
             }
             if let Ok(tok) = signed_admin.parse() {
-                response
-                    .headers_mut()
-                    .insert("set-admin-auth-token", tok);
+                response.headers_mut().insert("set-admin-auth-token", tok);
             }
 
             // 2. Set active session cookie and `set-auth-token` to the impersonated session

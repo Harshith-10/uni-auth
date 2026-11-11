@@ -1,7 +1,7 @@
 //! Email sending abstraction for verification and password reset flows.
 
-use std::sync::{Arc, Mutex};
 use crate::adapter::BoxFuture;
+use std::sync::{Arc, Mutex};
 
 pub trait EmailSender: Send + Sync {
     fn send_verification_email(

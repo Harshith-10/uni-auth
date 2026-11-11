@@ -12,7 +12,7 @@ use std::sync::Arc;
 use time::Duration;
 use tokio::net::TcpListener;
 
-use auth_axum::{auth_routes, AuthState, CurrentSession};
+use auth_axum::{AuthState, CurrentSession, auth_routes};
 use auth_client::{AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage, TokenStorage};
 use auth_core::{AuthConfig, AuthService};
 use auth_proto::SessionWire;
@@ -215,7 +215,10 @@ async fn test_cross_platform_dual_session_and_invalidation() {
     let has_web_session = desktop_sessions.iter().any(|s| s.id == web_session_id);
     let has_desktop_session = desktop_sessions.iter().any(|s| s.id == desktop_session_id);
     assert!(has_web_session, "Desktop list must include Web session");
-    assert!(has_desktop_session, "Desktop list must include Desktop session");
+    assert!(
+        has_desktop_session,
+        "Desktop list must include Desktop session"
+    );
 
     // 3B. Web client queries list-sessions via Cookie
     let web_list_resp = web_client
@@ -320,5 +323,8 @@ async fn test_cross_platform_dual_session_and_invalidation() {
         .await
         .expect("Desktop saas/me signed-out request failed");
 
-    assert_eq!(desktop_signed_out_resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        desktop_signed_out_resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
 }

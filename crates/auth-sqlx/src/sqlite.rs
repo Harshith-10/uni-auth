@@ -5,8 +5,8 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::{QueryBuilder, Row};
 use std::str::FromStr;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use auth_core::adapter::{AuthAdapter, BoxFuture};
@@ -275,7 +275,11 @@ fn apply_sqlite_user_filters(
 
         match field {
             "banned" => {
-                let banned_int: i64 = if needle == "true" || needle == "1" { 1 } else { 0 };
+                let banned_int: i64 = if needle == "true" || needle == "1" {
+                    1
+                } else {
+                    0
+                };
                 if op == "ne" {
                     qb.push("banned != ");
                 } else {
@@ -284,7 +288,11 @@ fn apply_sqlite_user_filters(
                 qb.push_bind(banned_int);
             }
             "emailVerified" | "email_verified" => {
-                let ver_int: i64 = if needle == "true" || needle == "1" { 1 } else { 0 };
+                let ver_int: i64 = if needle == "true" || needle == "1" {
+                    1
+                } else {
+                    0
+                };
                 if op == "ne" {
                     qb.push("email_verified != ");
                 } else {
@@ -461,15 +469,14 @@ impl AuthAdapter for SqliteAuthAdapter {
             let verified_int: i64 = if verified { 1 } else { 0 };
             let now_str = format_dt(OffsetDateTime::now_utc());
 
-            let res = sqlx::query(
-                r#"UPDATE "user" SET email_verified = ?, updated_at = ? WHERE id = ?"#,
-            )
-            .bind(verified_int)
-            .bind(now_str)
-            .bind(id)
-            .execute(&pool)
-            .await
-            .map_err(|e| AdapterError::Query(e.to_string()))?;
+            let res =
+                sqlx::query(r#"UPDATE "user" SET email_verified = ?, updated_at = ? WHERE id = ?"#)
+                    .bind(verified_int)
+                    .bind(now_str)
+                    .bind(id)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| AdapterError::Query(e.to_string()))?;
 
             if res.rows_affected() == 0 {
                 Err(AdapterError::NotFound)
@@ -505,16 +512,14 @@ impl AuthAdapter for SqliteAuthAdapter {
             let now = OffsetDateTime::now_utc();
             let now_str = format_dt(now);
 
-            sqlx::query(
-                r#"UPDATE "user" SET name = ?, image = ?, updated_at = ? WHERE id = ?"#,
-            )
-            .bind(&new_name)
-            .bind(&new_image)
-            .bind(&now_str)
-            .bind(&id)
-            .execute(&pool)
-            .await
-            .map_err(|e| AdapterError::Query(e.to_string()))?;
+            sqlx::query(r#"UPDATE "user" SET name = ?, image = ?, updated_at = ? WHERE id = ?"#)
+                .bind(&new_name)
+                .bind(&new_image)
+                .bind(&now_str)
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
 
             Ok(UserRecord {
                 id,
@@ -681,7 +686,10 @@ impl AuthAdapter for SqliteAuthAdapter {
         let pool = self.pool.clone();
         let id = id.to_string();
         Box::pin(async move {
-            let mut tx = pool.begin().await.map_err(|e| AdapterError::Query(e.to_string()))?;
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
             sqlx::query(r#"DELETE FROM "account" WHERE user_id = ?"#)
                 .bind(&id)
                 .execute(&mut *tx)
@@ -697,7 +705,9 @@ impl AuthAdapter for SqliteAuthAdapter {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| AdapterError::Query(e.to_string()))?;
-            tx.commit().await.map_err(|e| AdapterError::Query(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
             Ok(())
         })
     }
@@ -772,14 +782,13 @@ impl AuthAdapter for SqliteAuthAdapter {
         let provider_id = provider_id.to_string();
         let account_id = account_id.to_string();
         Box::pin(async move {
-            let row = sqlx::query(
-                r#"SELECT * FROM "account" WHERE provider_id = ? AND account_id = ?"#,
-            )
-            .bind(provider_id)
-            .bind(account_id)
-            .fetch_optional(&pool)
-            .await
-            .map_err(|e| AdapterError::Query(e.to_string()))?;
+            let row =
+                sqlx::query(r#"SELECT * FROM "account" WHERE provider_id = ? AND account_id = ?"#)
+                    .bind(provider_id)
+                    .bind(account_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| AdapterError::Query(e.to_string()))?;
 
             row.map(map_account_row).transpose()
         })

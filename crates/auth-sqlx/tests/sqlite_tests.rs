@@ -159,10 +159,7 @@ async fn test_sqlite_adapter_direct_crud() {
         Some("initial_refresh")
     );
     assert_eq!(refreshed_acc.id_token.as_deref(), Some("new_id_tok"));
-    assert_eq!(
-        refreshed_acc.scope.as_deref(),
-        Some("openid,email,profile")
-    );
+    assert_eq!(refreshed_acc.scope.as_deref(), Some("openid,email,profile"));
 
     // 6. Session & Impersonated session lifecycle
     let session = adapter
@@ -325,7 +322,10 @@ async fn test_auth_service_with_sqlite_backend() {
         .await
         .expect("Profile update with image should succeed");
     assert_eq!(updated.user.as_ref().unwrap().name, "SQLite Updated");
-    assert_eq!(updated.user.as_ref().unwrap().image.as_deref(), Some("https://example.com/pic.png"));
+    assert_eq!(
+        updated.user.as_ref().unwrap().image.as_deref(),
+        Some("https://example.com/pic.png")
+    );
 
     let cleared = service
         .update_user(

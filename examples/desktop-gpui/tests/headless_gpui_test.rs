@@ -2,7 +2,7 @@ use std::sync::Arc;
 use time::Duration;
 use tokio::net::TcpListener;
 
-use auth_axum::{auth_router, AuthState};
+use auth_axum::{AuthState, auth_router};
 use auth_client::{AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage, TokenStorage};
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
 use auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};

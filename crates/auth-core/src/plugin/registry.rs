@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
+use super::{
+    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, PluginMigration, PluginRateLimitRule,
+};
 use crate::error::AuthError;
 use crate::service::AuthService;
-use super::{BetterAuthPlugin, DatabaseHooks, EndpointHookContext, PluginMigration, PluginRateLimitRule};
 
 /// Thread-safe registry of `BetterAuthPlugin` extensions.
 #[derive(Default, Clone)]
@@ -47,18 +49,12 @@ impl PluginRegistry {
 
     /// Collects declarative migrations from registered plugins.
     pub fn migrations(&self) -> Vec<PluginMigration> {
-        self.plugins
-            .iter()
-            .filter_map(|p| p.migration())
-            .collect()
+        self.plugins.iter().filter_map(|p| p.migration()).collect()
     }
 
     /// Collects rate limit rules from registered plugins.
     pub fn rate_limits(&self) -> Vec<PluginRateLimitRule> {
-        self.plugins
-            .iter()
-            .flat_map(|p| p.rate_limits())
-            .collect()
+        self.plugins.iter().flat_map(|p| p.rate_limits()).collect()
     }
 
     /// Executes `on_before_endpoint` hooks matching the given endpoint path.

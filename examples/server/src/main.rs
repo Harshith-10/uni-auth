@@ -14,7 +14,7 @@ use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use auth_axum::{
-    auth_routes_with_plugins, build_auth_cors_layer, AuthState, CurrentSession, OAuthProviderConfig,
+    AuthState, CurrentSession, OAuthProviderConfig, auth_routes_with_plugins, build_auth_cors_layer,
 };
 use auth_core::{AdminUpdateUserFields, AuthConfig, AuthService};
 use auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
@@ -199,7 +199,9 @@ fn load_env_map() -> std::collections::HashMap<String, String> {
 }
 
 fn get_env(key: &str, env_map: &std::collections::HashMap<String, String>) -> Option<String> {
-    std::env::var(key).ok().or_else(|| env_map.get(key).cloned())
+    std::env::var(key)
+        .ok()
+        .or_else(|| env_map.get(key).cloned())
 }
 
 #[tokio::main]
@@ -289,7 +291,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if configured_providers.is_empty() {
-        tracing::warn!("⚠️ No OAuth providers configured. Set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in .env to enable Google OAuth");
+        tracing::warn!(
+            "⚠️ No OAuth providers configured. Set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in .env to enable Google OAuth"
+        );
     } else {
         tracing::info!("🔑 OAuth providers registered: {:?}", configured_providers);
     }

@@ -4,17 +4,17 @@
 //! to be called seamlessly from both React web apps (via cookies) and GPUI native desktop
 //! apps (via `Authorization: Bearer <token>`).
 
-use std::ops::Deref;
+use axum::Json;
 use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use std::ops::Deref;
 
-use auth_core::RequestMeta;
-use auth_proto::{error_codes, AuthErrorResponse, SessionWire, UserWire};
 use crate::cookies::extract_cookie_token;
 use crate::state::AuthState;
+use auth_core::RequestMeta;
+use auth_proto::{AuthErrorResponse, SessionWire, UserWire, error_codes};
 
 /// Extracts client IP address (`x-forwarded-for` / `x-real-ip`) and `user-agent` from HTTP headers.
 pub fn extract_request_meta(headers: &HeaderMap) -> RequestMeta {
@@ -153,11 +153,9 @@ where
         let auth_state = AuthState::from_ref(state);
 
         if !auth_state.service.is_session_fresh(&current.session) {
-            let err = AuthErrorResponse::new(
-                error_codes::SESSION_NOT_FRESH,
-                "Session is not fresh",
-            )
-            .with_status(403);
+            let err =
+                AuthErrorResponse::new(error_codes::SESSION_NOT_FRESH, "Session is not fresh")
+                    .with_status(403);
             return Err((StatusCode::FORBIDDEN, Json(err)).into_response());
         }
 

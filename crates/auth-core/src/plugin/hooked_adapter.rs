@@ -208,7 +208,11 @@ impl AuthAdapter for HookedAdapter {
             let mut cur_fields = fields;
             for hook in &hooks {
                 match hook
-                    .before_update_user(&user_id, UserUpdatePatch::Admin(cur_fields.clone()), &*inner)
+                    .before_update_user(
+                        &user_id,
+                        UserUpdatePatch::Admin(cur_fields.clone()),
+                        &*inner,
+                    )
                     .await
                 {
                     Ok(HookOutcome::Continue(UserUpdatePatch::Admin(f)))

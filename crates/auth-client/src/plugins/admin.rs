@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use reqwest::header::HeaderValue;
 use reqwest::Method;
+use reqwest::header::HeaderValue;
 
 use auth_proto::access::{AccessControl, Connector};
 use auth_proto::{
@@ -195,10 +195,7 @@ impl<'a> AdminClientHandle<'a> {
     }
 
     /// `POST /api/auth/admin/update-user`
-    pub async fn update_user(
-        &self,
-        req: AdminUpdateUserRequest,
-    ) -> Result<UserWire, ClientError> {
+    pub async fn update_user(&self, req: AdminUpdateUserRequest) -> Result<UserWire, ClientError> {
         self.client
             .send_auth_request(Method::POST, "/admin/update-user", None::<&()>, Some(&req))
             .await
@@ -210,12 +207,7 @@ impl<'a> AdminClientHandle<'a> {
         query: &AdminListUsersQuery,
     ) -> Result<AdminListUsersResponse, ClientError> {
         self.client
-            .send_auth_request(
-                Method::GET,
-                "/admin/list-users",
-                Some(query),
-                None::<&()>,
-            )
+            .send_auth_request(Method::GET, "/admin/list-users", Some(query), None::<&()>)
             .await
     }
 

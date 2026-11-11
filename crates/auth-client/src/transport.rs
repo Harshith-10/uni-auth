@@ -3,13 +3,13 @@
 //! Provides automated Bearer authorization header injection, `set-auth-token` interception,
 //! plugin request/response lifecycle hooks, structured error decoding, and reactive signal emission.
 
-use reqwest::header::HeaderMap;
 use reqwest::Method;
-use serde::de::DeserializeOwned;
+use reqwest::header::HeaderMap;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-use auth_proto::AuthErrorResponse;
 use crate::client::{BetterAuthNativeClient, ClientError};
+use auth_proto::AuthErrorResponse;
 
 /// Context passed to `AuthClientPlugin::on_request` hooks before transmission.
 #[derive(Debug, Clone)]

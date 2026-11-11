@@ -1,18 +1,16 @@
-use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
 use time::OffsetDateTime;
 
-use auth_core::models::CreateVerificationInput;
-use auth_core::OAuthCallbackResult;
-use auth_proto::{
-    AuthErrorResponse, LinkSocialRequest, SignInSocialRequest, UnlinkAccountRequest,
-};
 use crate::error_to_response;
-use crate::extract::{extract_request_meta, CurrentSession, FreshSession};
+use crate::extract::{CurrentSession, FreshSession, extract_request_meta};
 use crate::state::AuthState;
+use auth_core::OAuthCallbackResult;
+use auth_core::models::CreateVerificationInput;
+use auth_proto::{AuthErrorResponse, LinkSocialRequest, SignInSocialRequest, UnlinkAccountRequest};
 
 pub async fn sign_in_social(
     State(state): State<AuthState>,
@@ -117,7 +115,10 @@ pub async fn oauth_callback(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(AuthErrorResponse::new("INVALID_CODE", "Missing authorization code").with_status(400)),
+                Json(
+                    AuthErrorResponse::new("INVALID_CODE", "Missing authorization code")
+                        .with_status(400),
+                ),
             )
                 .into_response();
         }
@@ -128,7 +129,9 @@ pub async fn oauth_callback(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(AuthErrorResponse::new("INVALID_STATE", "Missing OAuth state").with_status(400)),
+                Json(
+                    AuthErrorResponse::new("INVALID_STATE", "Missing OAuth state").with_status(400),
+                ),
             )
                 .into_response();
         }
@@ -144,7 +147,10 @@ pub async fn oauth_callback(
         None => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(AuthErrorResponse::new("PROVIDER_NOT_FOUND", "Provider not configured").with_status(404)),
+                Json(
+                    AuthErrorResponse::new("PROVIDER_NOT_FOUND", "Provider not configured")
+                        .with_status(404),
+                ),
             )
                 .into_response();
         }
@@ -158,12 +164,7 @@ pub async fn oauth_callback(
 
     let profile = match state
         .oauth_http_client
-        .exchange_code_and_fetch_profile(
-            provider,
-            &code,
-            &state_data.code_verifier,
-            &callback_uri,
-        )
+        .exchange_code_and_fetch_profile(provider, &code, &state_data.code_verifier, &callback_uri)
         .await
     {
         Ok(p) => p,
@@ -197,11 +198,8 @@ pub async fn oauth_callback(
         Err(err) => {
             if let Some(ref err_cb) = error_callback_url {
                 let sep = if err_cb.contains('?') { "&" } else { "?" };
-                return Redirect::temporary(&format!(
-                    "{err_cb}{sep}error={}",
-                    err.error_code()
-                ))
-                .into_response();
+                return Redirect::temporary(&format!("{err_cb}{sep}error={}", err.error_code()))
+                    .into_response();
             }
             return error_to_response(err);
         }
