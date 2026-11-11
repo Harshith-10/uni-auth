@@ -174,6 +174,13 @@ pub trait AuthAdapter: Send + Sync {
     ) -> BoxFuture<'static, Result<(Vec<UserRecord>, usize), AdapterError>>;
     fn delete_user(&self, id: &str) -> BoxFuture<'static, Result<(), AdapterError>>;
 
+    /// Creates a user and associated credential/account atomically.
+    fn create_user_with_account(
+        &self,
+        user_input: CreateUserInput,
+        account_input: CreateAccountInput,
+    ) -> BoxFuture<'static, Result<(UserRecord, AccountRecord), AdapterError>>;
+
     // ── Accounts ──
     fn create_account(
         &self,
@@ -323,6 +330,78 @@ impl AuthAdapter for InMemoryAuthAdapter {
             s.email_to_id.insert(normalized_email, id.clone());
             s.users.insert(id, user.clone());
             Ok(user)
+        })
+    }
+
+    fn create_user_with_account(
+        &self,
+        user_input: CreateUserInput,
+        mut account_input: CreateAccountInput,
+    ) -> BoxFuture<'static, Result<(UserRecord, AccountRecord), AdapterError>> {
+        let store = Arc::clone(&self.store);
+        Box::pin(async move {
+            let mut s = store
+                .write()
+                .map_err(|e| AdapterError::Internal(e.to_string()))?;
+            let normalized_email = user_input.email.to_lowercase();
+            if s.email_to_id.contains_key(&normalized_email) {
+                return Err(AdapterError::UniqueViolation(format!(
+                    "User with email '{normalized_email}' already exists"
+                )));
+            }
+
+            let user_id = user_input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let now = OffsetDateTime::now_utc();
+            let user = UserRecord {
+                id: user_id.clone(),
+                name: user_input.name,
+                email: normalized_email.clone(),
+                email_verified: user_input.email_verified,
+                image: user_input.image,
+                created_at: now,
+                updated_at: now,
+                role: Some(user_input.role.unwrap_or_else(|| "user".to_string())),
+                banned: false,
+                ban_reason: None,
+                ban_expires: None,
+            };
+
+            if account_input.user_id.is_empty() {
+                account_input.user_id = user_id.clone();
+            }
+            if account_input.account_id.is_empty() {
+                account_input.account_id = user_id.clone();
+            }
+
+            let key = format!("{}:{}", account_input.provider_id, account_input.account_id);
+            if s.accounts.contains_key(&key) {
+                return Err(AdapterError::UniqueViolation(format!(
+                    "Account for provider '{}' with account ID '{}' already exists",
+                    account_input.provider_id, account_input.account_id
+                )));
+            }
+
+            let account_id = account_input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let account = AccountRecord {
+                id: account_id,
+                user_id: account_input.user_id,
+                account_id: account_input.account_id,
+                provider_id: account_input.provider_id,
+                access_token: account_input.access_token,
+                refresh_token: account_input.refresh_token,
+                id_token: account_input.id_token,
+                access_token_expires_at: account_input.access_token_expires_at,
+                refresh_token_expires_at: account_input.refresh_token_expires_at,
+                scope: account_input.scope,
+                password: account_input.password,
+                created_at: now,
+                updated_at: now,
+            };
+
+            s.email_to_id.insert(normalized_email, user_id.clone());
+            s.users.insert(user_id, user.clone());
+            s.accounts.insert(key, account.clone());
+            Ok((user, account))
         })
     }
 

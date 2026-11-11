@@ -1,5 +1,5 @@
 -- Better Auth SQLite Migration
--- Core Schema + Admin Plugin: user, session, account, verification
+-- Core Schema: user, session, account, verification
 
 PRAGMA foreign_keys = ON;
 
@@ -9,10 +9,6 @@ CREATE TABLE IF NOT EXISTS "user" (
     email TEXT NOT NULL UNIQUE,
     email_verified INTEGER NOT NULL DEFAULT 0,
     image TEXT,
-    role TEXT DEFAULT 'user',
-    banned INTEGER NOT NULL DEFAULT 0,
-    ban_reason TEXT,
-    ban_expires TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -26,7 +22,6 @@ CREATE TABLE IF NOT EXISTS "session" (
     expires_at TEXT NOT NULL,
     ip_address TEXT,
     user_agent TEXT,
-    impersonated_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

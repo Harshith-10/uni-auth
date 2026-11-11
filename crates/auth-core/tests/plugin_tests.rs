@@ -297,7 +297,10 @@ async fn test_database_hooks_prevent_delete_user() {
 
     // Set prevent delete to true
     hooks.prevent_delete_user.store(true, Ordering::SeqCst);
-    service.adapter().delete_user(&user.id).await.unwrap();
+    let cancel_res = service.adapter().delete_user(&user.id).await;
+    assert!(cancel_res.is_err());
+    let auth_err = AuthError::from(cancel_res.err().unwrap());
+    assert_eq!(auth_err.error_code(), "HOOK_CANCELLED");
 
     // User should still exist because before_delete_user cancelled deletion
     let still_exists = service.adapter().find_user_by_id(&user.id).await.unwrap();
@@ -691,6 +694,6 @@ async fn test_unified_update_user_adapter_and_hooks() {
     assert_eq!(updated.image.as_deref(), Some("https://avatar.com/1.png"));
     assert!(updated.email_verified);
     assert_eq!(updated.role.as_deref(), Some("admin"));
-    assert_eq!(updated.banned, true);
+    assert!(updated.banned);
     assert_eq!(updated.ban_reason.as_deref(), Some("spamming"));
 }

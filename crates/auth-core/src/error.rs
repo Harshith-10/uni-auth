@@ -199,6 +199,7 @@ impl From<AdapterError> for AuthError {
     fn from(err: AdapterError) -> Self {
         match err {
             AdapterError::Auth(auth_err) => *auth_err,
+            AdapterError::UniqueViolation(_) => AuthError::UserAlreadyExists,
             other => AuthError::Adapter(other),
         }
     }

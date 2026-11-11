@@ -47,11 +47,26 @@ pub async fn hash_password(password: String) -> Result<String, String> {
 pub async fn verify_password(hash: String, password: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
         if is_legacy_scrypt_hash(&hash) {
-            return verify_scrypt_better_auth(&hash, &password);
+            return match verify_scrypt_better_auth(&hash, &password) {
+                Ok(valid) => Ok(valid),
+                Err(e) => {
+                    tracing::warn!("Malformed scrypt hash encountered: {e}");
+                    let normalized: String = password.nfkc().collect();
+                    let dummy_salt = SaltString::generate(&mut OsRng);
+                    let _ = Argon2::default().hash_password(normalized.as_bytes(), &dummy_salt);
+                    Ok(false)
+                }
+            };
         }
         let parsed_hash = match PasswordHash::new(&hash) {
             Ok(h) => h,
-            Err(e) => return Err(format!("Invalid password hash format: {e}")),
+            Err(e) => {
+                tracing::warn!("Malformed password hash format encountered: {e}");
+                let normalized: String = password.nfkc().collect();
+                let dummy_salt = SaltString::generate(&mut OsRng);
+                let _ = Argon2::default().hash_password(normalized.as_bytes(), &dummy_salt);
+                return Ok(false);
+            }
         };
         let normalized: String = password.nfkc().collect();
         let argon2 = Argon2::default();

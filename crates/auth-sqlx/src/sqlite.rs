@@ -17,6 +17,8 @@ use auth_core::models::{
 };
 use auth_core::plugin::PluginMigration;
 
+use crate::naming::NamingConvention;
+
 const SQLITE_SCHEMA: &str = include_str!("../migrations/sqlite.sql");
 
 fn format_dt(dt: OffsetDateTime) -> String {
@@ -25,7 +27,20 @@ fn format_dt(dt: OffsetDateTime) -> String {
 }
 
 fn parse_dt(s: &str) -> OffsetDateTime {
-    OffsetDateTime::parse(s, &Rfc3339).unwrap_or_else(|_| OffsetDateTime::now_utc())
+    if let Ok(dt) = OffsetDateTime::parse(s, &Rfc3339) {
+        return dt;
+    }
+    if let Ok(millis) = s.parse::<i64>() {
+        let secs = if millis > 100_000_000_000 {
+            millis / 1000
+        } else {
+            millis
+        };
+        if let Ok(dt) = OffsetDateTime::from_unix_timestamp(secs) {
+            return dt;
+        }
+    }
+    OffsetDateTime::now_utc()
 }
 
 fn parse_opt_dt(opt: Option<String>) -> Option<OffsetDateTime> {
@@ -36,17 +51,24 @@ fn format_opt_dt(opt: Option<OffsetDateTime>) -> Option<String> {
     opt.map(format_dt)
 }
 
-fn map_user_row(row: SqliteRow) -> Result<UserRecord, AdapterError> {
+pub fn map_user_row(row: SqliteRow) -> Result<UserRecord, AdapterError> {
     let email_verified_int: i64 = row
         .try_get("email_verified")
+        .or_else(|_| row.try_get("emailVerified"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
     let banned_int: i64 = row.try_get("banned").unwrap_or(0);
-    let ban_expires_str: Option<String> = row.try_get("ban_expires").ok().flatten();
+    let ban_expires_str: Option<String> = row
+        .try_get("ban_expires")
+        .ok()
+        .or_else(|| row.try_get("banExpires").ok())
+        .flatten();
     let created_at_str: String = row
         .try_get("created_at")
+        .or_else(|_| row.try_get("createdAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
     let updated_at_str: String = row
         .try_get("updated_at")
+        .or_else(|_| row.try_get("updatedAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
 
     Ok(UserRecord {
@@ -67,81 +89,121 @@ fn map_user_row(row: SqliteRow) -> Result<UserRecord, AdapterError> {
         updated_at: parse_dt(&updated_at_str),
         role: row.try_get("role").ok().flatten(),
         banned: banned_int != 0,
-        ban_reason: row.try_get("ban_reason").ok().flatten(),
+        ban_reason: row
+            .try_get("ban_reason")
+            .ok()
+            .or_else(|| row.try_get("banReason").ok())
+            .flatten(),
         ban_expires: parse_opt_dt(ban_expires_str),
     })
 }
 
 fn map_session_row(row: SqliteRow) -> Result<SessionRecord, AdapterError> {
+    let user_id: String = row
+        .try_get("user_id")
+        .or_else(|_| row.try_get("userId"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
     let expires_at_str: String = row
         .try_get("expires_at")
+        .or_else(|_| row.try_get("expiresAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let ip_address: Option<String> = row
+        .try_get("ip_address")
+        .ok()
+        .or_else(|| row.try_get("ipAddress").ok())
+        .flatten();
+    let user_agent: Option<String> = row
+        .try_get("user_agent")
+        .ok()
+        .or_else(|| row.try_get("userAgent").ok())
+        .flatten();
     let created_at_str: String = row
         .try_get("created_at")
+        .or_else(|_| row.try_get("createdAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
     let updated_at_str: String = row
         .try_get("updated_at")
+        .or_else(|_| row.try_get("updatedAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
 
     Ok(SessionRecord {
         id: row
             .try_get("id")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        user_id: row
-            .try_get("user_id")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        user_id,
         token: row
             .try_get("token")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
         expires_at: parse_dt(&expires_at_str),
-        ip_address: row
-            .try_get("ip_address")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        user_agent: row
-            .try_get("user_agent")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        ip_address,
+        user_agent,
         created_at: parse_dt(&created_at_str),
         updated_at: parse_dt(&updated_at_str),
-        impersonated_by: row.try_get("impersonated_by").ok().flatten(),
+        impersonated_by: row
+            .try_get("impersonated_by")
+            .ok()
+            .or_else(|| row.try_get("impersonatedBy").ok())
+            .flatten(),
     })
 }
 
 fn map_account_row(row: SqliteRow) -> Result<AccountRecord, AdapterError> {
+    let user_id: String = row
+        .try_get("user_id")
+        .or_else(|_| row.try_get("userId"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let account_id: String = row
+        .try_get("account_id")
+        .or_else(|_| row.try_get("accountId"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let provider_id: String = row
+        .try_get("provider_id")
+        .or_else(|_| row.try_get("providerId"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let access_token: Option<String> = row
+        .try_get("access_token")
+        .ok()
+        .or_else(|| row.try_get("accessToken").ok())
+        .flatten();
+    let refresh_token: Option<String> = row
+        .try_get("refresh_token")
+        .ok()
+        .or_else(|| row.try_get("refreshToken").ok())
+        .flatten();
+    let id_token: Option<String> = row
+        .try_get("id_token")
+        .ok()
+        .or_else(|| row.try_get("idToken").ok())
+        .flatten();
     let access_token_expires_at: Option<String> = row
         .try_get("access_token_expires_at")
-        .map_err(|e| AdapterError::Query(e.to_string()))?;
+        .ok()
+        .or_else(|| row.try_get("accessTokenExpiresAt").ok())
+        .flatten();
     let refresh_token_expires_at: Option<String> = row
         .try_get("refresh_token_expires_at")
-        .map_err(|e| AdapterError::Query(e.to_string()))?;
+        .ok()
+        .or_else(|| row.try_get("refreshTokenExpiresAt").ok())
+        .flatten();
     let created_at_str: String = row
         .try_get("created_at")
+        .or_else(|_| row.try_get("createdAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
     let updated_at_str: String = row
         .try_get("updated_at")
+        .or_else(|_| row.try_get("updatedAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
 
     Ok(AccountRecord {
         id: row
             .try_get("id")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        user_id: row
-            .try_get("user_id")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        account_id: row
-            .try_get("account_id")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        provider_id: row
-            .try_get("provider_id")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        access_token: row
-            .try_get("access_token")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        refresh_token: row
-            .try_get("refresh_token")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        id_token: row
-            .try_get("id_token")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        user_id,
+        account_id,
+        provider_id,
+        access_token,
+        refresh_token,
+        id_token,
         access_token_expires_at: parse_opt_dt(access_token_expires_at),
         refresh_token_expires_at: parse_opt_dt(refresh_token_expires_at),
         scope: row
@@ -158,12 +220,15 @@ fn map_account_row(row: SqliteRow) -> Result<AccountRecord, AdapterError> {
 fn map_verification_row(row: SqliteRow) -> Result<VerificationRecord, AdapterError> {
     let expires_at_str: String = row
         .try_get("expires_at")
+        .or_else(|_| row.try_get("expiresAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
     let created_at_str: String = row
         .try_get("created_at")
+        .or_else(|_| row.try_get("createdAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
     let updated_at_str: String = row
         .try_get("updated_at")
+        .or_else(|_| row.try_get("updatedAt"))
         .map_err(|e| AdapterError::Query(e.to_string()))?;
 
     Ok(VerificationRecord {
@@ -186,11 +251,24 @@ fn map_verification_row(row: SqliteRow) -> Result<VerificationRecord, AdapterErr
 #[derive(Clone)]
 pub struct SqliteAuthAdapter {
     pool: SqlitePool,
+    naming: NamingConvention,
 }
 
 impl SqliteAuthAdapter {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            naming: NamingConvention::SnakeCase,
+        }
+    }
+
+    pub fn with_naming_convention(mut self, naming: NamingConvention) -> Self {
+        self.naming = naming;
+        self
+    }
+
+    pub fn naming_convention(&self) -> NamingConvention {
+        self.naming
     }
 
     /// Creates an in-memory SQLite database and applies embedded Better Auth schema.
@@ -206,6 +284,7 @@ impl SqliteAuthAdapter {
 
         let adapter = Self::new(pool);
         adapter.run_migrations().await?;
+        adapter.run_admin_migrations().await?;
         Ok(adapter)
     }
 
@@ -215,8 +294,11 @@ impl SqliteAuthAdapter {
             .execute(&self.pool)
             .await?;
         sqlx::raw_sql(SQLITE_SCHEMA).execute(&self.pool).await?;
+        Ok(())
+    }
 
-        // Idempotent column additions for existing pre-Admin SQLite database files
+    /// Executes declarative Admin plugin migrations adding role, ban, and impersonation columns.
+    pub async fn run_admin_migrations(&self) -> Result<(), sqlx::Error> {
         for stmt in [
             r#"ALTER TABLE "user" ADD COLUMN role TEXT DEFAULT 'user'"#,
             r#"ALTER TABLE "user" ADD COLUMN banned INTEGER NOT NULL DEFAULT 0"#,
@@ -482,6 +564,127 @@ impl AuthAdapter for SqliteAuthAdapter {
                 }
                 Err(e) => Err(AdapterError::Query(e.to_string())),
             }
+        })
+    }
+
+    fn create_user_with_account(
+        &self,
+        user_input: CreateUserInput,
+        mut account_input: CreateAccountInput,
+    ) -> BoxFuture<'static, Result<(UserRecord, AccountRecord), AdapterError>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            let id = user_input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let email = user_input.email.to_lowercase();
+            let now = OffsetDateTime::now_utc();
+            let now_str = format_dt(now);
+            let verified_int: i64 = if user_input.email_verified { 1 } else { 0 };
+            let role = user_input.role.unwrap_or_else(|| "user".to_string());
+
+            let user_res = sqlx::query(
+                r#"
+                INSERT INTO "user" (id, name, email, email_verified, image, role, banned, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+                "#,
+            )
+            .bind(&id)
+            .bind(&user_input.name)
+            .bind(&email)
+            .bind(verified_int)
+            .bind(&user_input.image)
+            .bind(&role)
+            .bind(&now_str)
+            .bind(&now_str)
+            .execute(&mut *tx)
+            .await;
+
+            if let Err(sqlx::Error::Database(e)) = &user_res {
+                if e.is_unique_violation() {
+                    return Err(AdapterError::UniqueViolation(e.message().to_string()));
+                }
+            }
+            user_res.map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            if account_input.user_id.is_empty() {
+                account_input.user_id = id.clone();
+            }
+            if account_input.account_id.is_empty() {
+                account_input.account_id = id.clone();
+            }
+
+            let acc_id = account_input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let acc_res = sqlx::query(
+                r#"
+                INSERT INTO "account" (
+                    id, user_id, account_id, provider_id, access_token, refresh_token,
+                    id_token, access_token_expires_at, refresh_token_expires_at, scope,
+                    password, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&acc_id)
+            .bind(&account_input.user_id)
+            .bind(&account_input.account_id)
+            .bind(&account_input.provider_id)
+            .bind(&account_input.access_token)
+            .bind(&account_input.refresh_token)
+            .bind(&account_input.id_token)
+            .bind(format_opt_dt(account_input.access_token_expires_at))
+            .bind(format_opt_dt(account_input.refresh_token_expires_at))
+            .bind(&account_input.scope)
+            .bind(&account_input.password)
+            .bind(&now_str)
+            .bind(&now_str)
+            .execute(&mut *tx)
+            .await;
+
+            if let Err(sqlx::Error::Database(e)) = &acc_res {
+                if e.is_unique_violation() {
+                    return Err(AdapterError::UniqueViolation(e.message().to_string()));
+                }
+            }
+            acc_res.map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            tx.commit()
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            let user = UserRecord {
+                id,
+                name: user_input.name,
+                email,
+                email_verified: user_input.email_verified,
+                image: user_input.image,
+                created_at: now,
+                updated_at: now,
+                role: Some(role),
+                banned: false,
+                ban_reason: None,
+                ban_expires: None,
+            };
+
+            let account = AccountRecord {
+                id: acc_id,
+                user_id: account_input.user_id,
+                account_id: account_input.account_id,
+                provider_id: account_input.provider_id,
+                access_token: account_input.access_token,
+                refresh_token: account_input.refresh_token,
+                id_token: account_input.id_token,
+                access_token_expires_at: account_input.access_token_expires_at,
+                refresh_token_expires_at: account_input.refresh_token_expires_at,
+                scope: account_input.scope,
+                password: account_input.password,
+                created_at: now,
+                updated_at: now,
+            };
+
+            Ok((user, account))
         })
     }
 

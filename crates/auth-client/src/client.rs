@@ -11,12 +11,12 @@ use auth_proto::access::Connector;
 use auth_proto::{
     AccountListEntryWire, AdminCreateUserRequest, AdminHasPermissionRequest, AdminListUsersQuery,
     AdminListUsersResponse, AdminPermissionResponse, AdminSuccessResponse, AdminUpdateUserRequest,
-    AdminUserResponse, ChangePasswordRequest, DeleteUserRequest, DeleteUserResponse,
+    AdminUserResponse, ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest, DeleteUserResponse,
     OneTimeTokenGenerateResponse, RequestPasswordResetRequest, ResetPasswordRequest,
     RevokeSessionRequest, RoleValue, SendVerificationEmailRequest, SessionAndUserResponse,
     SessionWire, SignInEmailRequest, SignInResponse, SignInSocialRequest, SignInSocialResponse,
     SignOutResponse, SignUpEmailRequest, SignUpResponse, StatusResponse, UnlinkAccountRequest,
-    UpdateUserRequest, UserWire, VerifyEmailResponse,
+    UpdateUserRequest, UpdateUserResponse, UserWire, VerifyEmailResponse,
 };
 
 use crate::plugin::{
@@ -392,18 +392,24 @@ impl BetterAuthNativeClient {
         current_password: impl Into<String>,
         new_password: impl Into<String>,
         revoke_other_sessions: Option<bool>,
-    ) -> Result<StatusResponse, ClientError> {
-        self.send_auth_request(
-            Method::POST,
-            "/change-password",
-            None::<&()>,
-            Some(&ChangePasswordRequest {
-                current_password: current_password.into(),
-                new_password: new_password.into(),
-                revoke_other_sessions,
-            }),
-        )
-        .await
+    ) -> Result<ChangePasswordResponse, ClientError> {
+        let res: ChangePasswordResponse = self
+            .send_auth_request(
+                Method::POST,
+                "/change-password",
+                None::<&()>,
+                Some(&ChangePasswordRequest {
+                    current_password: current_password.into(),
+                    new_password: new_password.into(),
+                    revoke_other_sessions,
+                }),
+            )
+            .await?;
+        if let Some(ref new_token) = res.token {
+            let _ = self.storage.set_token(new_token);
+        }
+        self.notify_session_event(SessionSignalEvent::UserUpdated(res.user.clone()));
+        Ok(res)
     }
 
     /// Updates the current user's profile information (name and/or image).
@@ -412,7 +418,7 @@ impl BetterAuthNativeClient {
         name: Option<String>,
         image: Option<Option<String>>,
     ) -> Result<UserWire, ClientError> {
-        let res: UserWire = self
+        let res: UpdateUserResponse = self
             .send_auth_request(
                 Method::POST,
                 "/update-user",
@@ -424,8 +430,13 @@ impl BetterAuthNativeClient {
                 }),
             )
             .await?;
-        self.notify_session_event(SessionSignalEvent::UserUpdated(res.clone()));
-        Ok(res)
+        let user = res.user.ok_or_else(|| ClientError::Api {
+            status: 200,
+            code: None,
+            message: "No user object returned in update response".to_string(),
+        })?;
+        self.notify_session_event(SessionSignalEvent::UserUpdated(user.clone()));
+        Ok(user)
     }
 
     /// Deletes the current user account and clears secure storage.
@@ -514,7 +525,7 @@ impl BetterAuthNativeClient {
         #[derive(serde::Serialize)]
         struct VerifyEmailQuery {
             token: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[serde(rename = "callbackURL", skip_serializing_if = "Option::is_none")]
             callback_url: Option<String>,
         }
         self.send_auth_request(

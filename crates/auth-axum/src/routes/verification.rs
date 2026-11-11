@@ -22,7 +22,7 @@ pub async fn send_verification_email(
 #[derive(Deserialize)]
 pub struct VerifyEmailQuery {
     pub token: String,
-    #[serde(rename = "callbackURL", alias = "callbackUrl")]
+    #[serde(rename = "callbackURL", alias = "callbackUrl", alias = "callback_url")]
     pub callback_url: Option<String>,
 }
 

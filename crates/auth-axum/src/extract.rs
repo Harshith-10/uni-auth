@@ -44,23 +44,44 @@ pub fn extract_request_meta(headers: &HeaderMap) -> RequestMeta {
     }
 }
 
-/// Extracts an authentication token from either `Authorization: Bearer <token>` or cookies.
-pub fn extract_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
-    // 1. Bearer token extraction (case-insensitive scheme)
+/// Token source origin indicating whether it came from Bearer Authorization header or Cookie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtractedToken {
+    Bearer(String),
+    Cookie(String),
+}
+
+impl ExtractedToken {
+    pub fn is_bearer(&self) -> bool {
+        matches!(self, Self::Bearer(_))
+    }
+
+    pub fn token(&self) -> &str {
+        match self {
+            Self::Bearer(t) | Self::Cookie(t) => t,
+        }
+    }
+}
+
+/// Extracts an authentication token with its source origin (Bearer or Cookie).
+pub fn extract_token_with_source(headers: &HeaderMap, cookie_name: &str) -> Option<ExtractedToken> {
     if let Some(auth_header) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
             let trimmed = auth_str.trim();
             if trimmed.len() > 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
                 let token = trimmed[7..].trim();
                 if !token.is_empty() {
-                    return Some(token.to_string());
+                    return Some(ExtractedToken::Bearer(token.to_string()));
                 }
             }
         }
     }
+    extract_cookie_token(headers, cookie_name).map(ExtractedToken::Cookie)
+}
 
-    // 2. Cookie extraction fallback
-    extract_cookie_token(headers, cookie_name)
+/// Extracts an authentication token from either `Authorization: Bearer <token>` or cookies.
+pub fn extract_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
+    extract_token_with_source(headers, cookie_name).map(|t| t.token().to_string())
 }
 
 /// Extractor that requires a valid, active session.
@@ -90,16 +111,7 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let auth_state = AuthState::from_ref(state);
 
-        let is_bearer = parts
-            .headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.trim().to_ascii_lowercase().starts_with("bearer "))
-            .unwrap_or(false);
-
-        let token = extract_token_from_headers(&parts.headers, &auth_state.cookie_name);
-
-        let token = match token {
+        let extracted = match extract_token_with_source(&parts.headers, &auth_state.cookie_name) {
             Some(t) => t,
             None => {
                 let err = AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
@@ -107,11 +119,18 @@ where
             }
         };
 
-        // Cookies must carry a valid HMAC signature
-        if !is_bearer && auth_state.service.verify_signed_token(&token).is_none() {
-            let err = AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
-            return Err((StatusCode::UNAUTHORIZED, Json(err)).into_response());
-        }
+        let is_bearer = extracted.is_bearer();
+        let token = match extracted {
+            ExtractedToken::Bearer(tok) => tok,
+            ExtractedToken::Cookie(signed_cookie) => {
+                // Cookies must carry a valid HMAC signature
+                if auth_state.service.verify_signed_token(&signed_cookie).is_none() {
+                    let err = AuthErrorResponse::new("UNAUTHORIZED", "Unauthorized").with_status(401);
+                    return Err((StatusCode::UNAUTHORIZED, Json(err)).into_response());
+                }
+                signed_cookie
+            }
+        };
 
         match auth_state.service.get_session(&token).await {
             Ok(Some(session_and_user)) => Ok(CurrentSession {
@@ -185,23 +204,21 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let auth_state = AuthState::from_ref(state);
 
-        let is_bearer = parts
-            .headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.trim().to_ascii_lowercase().starts_with("bearer "))
-            .unwrap_or(false);
-
-        let token = extract_token_from_headers(&parts.headers, &auth_state.cookie_name);
-
-        let token = match token {
+        let extracted = match extract_token_with_source(&parts.headers, &auth_state.cookie_name) {
             Some(t) => t,
             None => return Ok(OptionalSession(None)),
         };
 
-        if !is_bearer && auth_state.service.verify_signed_token(&token).is_none() {
-            return Ok(OptionalSession(None));
-        }
+        let is_bearer = extracted.is_bearer();
+        let token = match extracted {
+            ExtractedToken::Bearer(tok) => tok,
+            ExtractedToken::Cookie(signed_cookie) => {
+                if auth_state.service.verify_signed_token(&signed_cookie).is_none() {
+                    return Ok(OptionalSession(None));
+                }
+                signed_cookie
+            }
+        };
 
         match auth_state.service.get_session(&token).await {
             Ok(Some(session_and_user)) => Ok(OptionalSession(Some(CurrentSession {

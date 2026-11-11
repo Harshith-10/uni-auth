@@ -565,3 +565,124 @@ async fn test_sqlite_unified_update_user() {
     assert!(updated.banned);
     assert_eq!(updated.ban_reason.as_deref(), Some("Terms violation"));
 }
+
+#[tokio::test]
+async fn test_sqlite_create_user_with_account_atomic() {
+    let adapter = SqliteAuthAdapter::new_in_memory()
+        .await
+        .expect("In-memory SQLite should initialize");
+
+    let (user, account) = adapter
+        .create_user_with_account(
+            CreateUserInput {
+                id: None,
+                name: "Atomic User".to_string(),
+                email: "atomic@example.com".to_string(),
+                image: None,
+                email_verified: true,
+                role: Some("user".to_string()),
+            },
+            CreateAccountInput {
+                id: None,
+                user_id: String::new(),
+                account_id: String::new(),
+                provider_id: "credential".to_string(),
+                password: Some("hashed_argon2_password".to_string()),
+                access_token: None,
+                refresh_token: None,
+                id_token: None,
+                access_token_expires_at: None,
+                refresh_token_expires_at: None,
+                scope: None,
+            },
+        )
+        .await
+        .expect("Atomic user and account creation should succeed");
+
+    assert_eq!(user.email, "atomic@example.com");
+    assert_eq!(account.user_id, user.id);
+    assert_eq!(account.provider_id, "credential");
+    assert_eq!(account.password.as_deref(), Some("hashed_argon2_password"));
+
+    // Check that duplicate email returns UniqueViolation
+    let dup_res = adapter
+        .create_user_with_account(
+            CreateUserInput {
+                id: None,
+                name: "Dup User".to_string(),
+                email: "atomic@example.com".to_string(),
+                image: None,
+                email_verified: false,
+                role: None,
+            },
+            CreateAccountInput {
+                id: None,
+                user_id: String::new(),
+                account_id: String::new(),
+                provider_id: "credential".to_string(),
+                password: None,
+                access_token: None,
+                refresh_token: None,
+                id_token: None,
+                access_token_expires_at: None,
+                refresh_token_expires_at: None,
+                scope: None,
+            },
+        )
+        .await;
+
+    assert!(dup_res.is_err());
+    assert!(matches!(
+        dup_res.err().unwrap(),
+        auth_core::error::AdapterError::UniqueViolation(_)
+    ));
+}
+
+#[tokio::test]
+async fn test_sqlite_camel_case_row_resilience() {
+    let adapter = SqliteAuthAdapter::new_in_memory()
+        .await
+        .expect("In-memory SQLite should initialize");
+
+    // Manually create a table matching Better-Auth TypeScript camelCase conventions
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS "better_auth_compat_user" (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            "emailVerified" INTEGER NOT NULL DEFAULT 1,
+            image TEXT,
+            "createdAt" TEXT NOT NULL,
+            "updatedAt" TEXT NOT NULL
+        );
+        "#,
+    )
+    .execute(adapter.pool())
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO "better_auth_compat_user" (id, name, email, "emailVerified", image, "createdAt", "updatedAt")
+        VALUES ('u1', 'Camel User', 'camel@example.com', 1, NULL, '2026-11-12T00:00:00Z', '2026-11-12T00:00:00Z');
+        "#,
+    )
+    .execute(adapter.pool())
+    .await
+    .unwrap();
+
+    // Query row and ensure map_user_row decodes camelCase correctly
+    let row = sqlx::query(
+        r#"SELECT id, name, email, "emailVerified", image, "createdAt", "updatedAt" FROM "better_auth_compat_user" WHERE id = 'u1'"#,
+    )
+    .fetch_one(adapter.pool())
+    .await
+    .unwrap();
+
+    // Verify row mapper
+    let user = auth_sqlx::sqlite::map_user_row(row).unwrap();
+    assert_eq!(user.id, "u1");
+    assert_eq!(user.name, "Camel User");
+    assert!(user.email_verified);
+}

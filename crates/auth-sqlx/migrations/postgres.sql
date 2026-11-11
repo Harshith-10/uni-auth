@@ -1,5 +1,5 @@
 -- Better Auth PostgreSQL Migration
--- Core Schema + Admin Plugin: user, session, account, verification
+-- Core Schema: user, session, account, verification
 
 CREATE TABLE IF NOT EXISTS "user" (
     id TEXT PRIMARY KEY NOT NULL,
@@ -7,10 +7,6 @@ CREATE TABLE IF NOT EXISTS "user" (
     email TEXT NOT NULL UNIQUE,
     email_verified BOOLEAN NOT NULL DEFAULT FALSE,
     image TEXT,
-    role TEXT DEFAULT 'user',
-    banned BOOLEAN NOT NULL DEFAULT FALSE,
-    ban_reason TEXT,
-    ban_expires TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
 );
@@ -24,7 +20,6 @@ CREATE TABLE IF NOT EXISTS "session" (
     expires_at TIMESTAMPTZ NOT NULL,
     ip_address TEXT,
     user_agent TEXT,
-    impersonated_by TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
 );

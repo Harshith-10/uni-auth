@@ -207,7 +207,7 @@ impl<'a> AdminService<'a> {
         }
 
         let email = req.email.trim().to_lowercase();
-        if !email.contains('@') || !email.contains('.') {
+        if !crate::service::is_valid_email(&email) {
             return Err(AuthError::InvalidEmail);
         }
 
@@ -408,7 +408,7 @@ impl<'a> AdminService<'a> {
             )?;
             if let Some(email_val) = req.data.get("email").and_then(|v| v.as_str()) {
                 let normalized = email_val.trim().to_lowercase();
-                if !normalized.contains('@') || !normalized.contains('.') {
+                if !crate::service::is_valid_email(&normalized) {
                     return Err(AuthError::InvalidEmail);
                 }
                 if let Some(existing) = self

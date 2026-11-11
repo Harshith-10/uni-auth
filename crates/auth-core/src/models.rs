@@ -82,7 +82,7 @@ impl SessionRecord {
 /// Internal account database entity.
 ///
 /// Contains sensitive credential data (password hash, tokens) that is **never** serialized to wire.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccountRecord {
     pub id: String,
     pub user_id: String,
@@ -97,6 +97,26 @@ pub struct AccountRecord {
     pub password: Option<String>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for AccountRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountRecord")
+            .field("id", &self.id)
+            .field("user_id", &self.user_id)
+            .field("account_id", &self.account_id)
+            .field("provider_id", &self.provider_id)
+            .field("access_token", &self.access_token.as_ref().map(|_| "[REDACTED]"))
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "[REDACTED]"))
+            .field("id_token", &self.id_token.as_ref().map(|_| "[REDACTED]"))
+            .field("access_token_expires_at", &self.access_token_expires_at)
+            .field("refresh_token_expires_at", &self.refresh_token_expires_at)
+            .field("scope", &self.scope)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
 }
 
 impl AccountRecord {

@@ -106,6 +106,26 @@ pub struct AuthService {
     session_fresh_age: Duration,
 }
 
+/// Validates an email address format.
+pub fn is_valid_email(email: &str) -> bool {
+    let email = email.trim();
+    if email.len() < 3 || email.len() > 254 {
+        return false;
+    }
+    let parts: Vec<&str> = email.split('@').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    let (local, domain) = (parts[0], parts[1]);
+    if local.is_empty() || domain.is_empty() {
+        return false;
+    }
+    if !domain.contains('.') || domain.starts_with('.') || domain.ends_with('.') {
+        return false;
+    }
+    true
+}
+
 impl AuthService {
     pub fn new(config: AuthConfig, adapter: Arc<dyn AuthAdapter>) -> Self {
         let raw_adapter = adapter.clone();
@@ -401,7 +421,7 @@ impl AuthService {
         self.check_rate_limit(&rate_key)?;
 
         let email = req.email.trim().to_lowercase();
-        if !email.contains('@') || !email.contains('.') {
+        if !is_valid_email(&email) {
             return Err(AuthError::InvalidEmail);
         }
 
@@ -420,36 +440,35 @@ impl AuthService {
             .await
             .map_err(AuthError::Crypto)?;
 
-        let user = self
+        let (user, _account) = self
             .adapter
-            .create_user(CreateUserInput {
-                id: None,
-                name: req.name,
-                email: email.clone(),
-                image: req.image,
-                email_verified: false,
-                role: None,
-            })
+            .create_user_with_account(
+                CreateUserInput {
+                    id: None,
+                    name: req.name,
+                    email: email.clone(),
+                    image: req.image,
+                    email_verified: false,
+                    role: None,
+                },
+                CreateAccountInput {
+                    id: None,
+                    user_id: String::new(),
+                    account_id: String::new(),
+                    provider_id: "credential".to_string(),
+                    password: Some(password_hash),
+                    access_token: None,
+                    refresh_token: None,
+                    id_token: None,
+                    access_token_expires_at: None,
+                    refresh_token_expires_at: None,
+                    scope: None,
+                },
+            )
             .await?;
 
         let user_wire = user.to_wire();
         self.notify_user_created(&user_wire).await;
-
-        self.adapter
-            .create_account(CreateAccountInput {
-                id: None,
-                user_id: user.id.clone(),
-                account_id: user.id.clone(),
-                provider_id: "credential".to_string(),
-                password: Some(password_hash),
-                access_token: None,
-                refresh_token: None,
-                id_token: None,
-                access_token_expires_at: None,
-                refresh_token_expires_at: None,
-                scope: None,
-            })
-            .await?;
 
         if self.config.require_email_verification {
             let token = crypto::generate_random_token(32);
@@ -516,7 +535,7 @@ impl AuthService {
         self.check_rate_limit(&rate_key)?;
 
         let email = req.email.trim().to_lowercase();
-        if !email.contains('@') || !email.contains('.') {
+        if !is_valid_email(&email) {
             return Err(AuthError::InvalidEmail);
         }
         if req.password.len() > self.config.max_password_length {
@@ -800,13 +819,18 @@ impl AuthService {
         }
 
         let identifier = format!("reset-password:{token}");
-        let consumed = self
+        let record = self
             .adapter
-            .consume_verification(&identifier)
+            .find_verification(&identifier)
             .await?
             .ok_or(AuthError::InvalidToken)?;
 
-        let user_id = consumed.value;
+        if record.expires_at < OffsetDateTime::now_utc() {
+            let _ = self.adapter.consume_verification(&identifier).await;
+            return Err(AuthError::TokenExpired);
+        }
+
+        let user_id = record.value;
         if self.adapter.find_user_by_id(&user_id).await?.is_none() {
             return Err(AuthError::UserNotFound);
         }
@@ -840,6 +864,8 @@ impl AuthService {
             }
             Err(e) => return Err(AuthError::from(e)),
         }
+
+        let _ = self.adapter.consume_verification(&identifier).await;
 
         self.adapter.delete_sessions_by_user_id(&user_id).await?;
         self.hooks.on_password_reset(&user_id).await;
@@ -994,6 +1020,8 @@ impl AuthService {
                 if age > self.session_fresh_age {
                     return Err(AuthError::SessionNotFresh);
                 }
+            } else {
+                return Err(AuthError::SessionNotFresh);
             }
         }
 

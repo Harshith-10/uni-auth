@@ -13,9 +13,24 @@ use auth_core::models::{
 };
 use auth_core::plugin::PluginMigration;
 
+use crate::naming::NamingConvention;
+
 const POSTGRES_SCHEMA: &str = include_str!("../migrations/postgres.sql");
 
 fn map_user_row(row: PgRow) -> Result<UserRecord, AdapterError> {
+    let email_verified: bool = row
+        .try_get("email_verified")
+        .or_else(|_| row.try_get("emailVerified"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let created_at = row
+        .try_get("created_at")
+        .or_else(|_| row.try_get("createdAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let updated_at = row
+        .try_get("updated_at")
+        .or_else(|_| row.try_get("updatedAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+
     Ok(UserRecord {
         id: row
             .try_get("id")
@@ -26,100 +41,160 @@ fn map_user_row(row: PgRow) -> Result<UserRecord, AdapterError> {
         email: row
             .try_get("email")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        email_verified: row
-            .try_get("email_verified")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        email_verified,
         image: row
             .try_get("image")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        created_at: row
-            .try_get("created_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        updated_at: row
-            .try_get("updated_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        created_at,
+        updated_at,
         role: row.try_get("role").ok().flatten(),
         banned: row.try_get("banned").unwrap_or(false),
-        ban_reason: row.try_get("ban_reason").ok().flatten(),
-        ban_expires: row.try_get("ban_expires").ok().flatten(),
+        ban_reason: row
+            .try_get("ban_reason")
+            .ok()
+            .or_else(|| row.try_get("banReason").ok())
+            .flatten(),
+        ban_expires: row
+            .try_get("ban_expires")
+            .ok()
+            .or_else(|| row.try_get("banExpires").ok())
+            .flatten(),
     })
 }
 
 fn map_session_row(row: PgRow) -> Result<SessionRecord, AdapterError> {
+    let user_id: String = row
+        .try_get("user_id")
+        .or_else(|_| row.try_get("userId"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let expires_at = row
+        .try_get("expires_at")
+        .or_else(|_| row.try_get("expiresAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let ip_address: Option<String> = row
+        .try_get("ip_address")
+        .ok()
+        .or_else(|| row.try_get("ipAddress").ok())
+        .flatten();
+    let user_agent: Option<String> = row
+        .try_get("user_agent")
+        .ok()
+        .or_else(|| row.try_get("userAgent").ok())
+        .flatten();
+    let created_at = row
+        .try_get("created_at")
+        .or_else(|_| row.try_get("createdAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let updated_at = row
+        .try_get("updated_at")
+        .or_else(|_| row.try_get("updatedAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+
     Ok(SessionRecord {
         id: row
             .try_get("id")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        user_id: row
-            .try_get("user_id")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        user_id,
         token: row
             .try_get("token")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        expires_at: row
-            .try_get("expires_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        ip_address: row
-            .try_get("ip_address")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        user_agent: row
-            .try_get("user_agent")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        created_at: row
-            .try_get("created_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        updated_at: row
-            .try_get("updated_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        impersonated_by: row.try_get("impersonated_by").ok().flatten(),
+        expires_at,
+        ip_address,
+        user_agent,
+        created_at,
+        updated_at,
+        impersonated_by: row
+            .try_get("impersonated_by")
+            .ok()
+            .or_else(|| row.try_get("impersonatedBy").ok())
+            .flatten(),
     })
 }
 
 fn map_account_row(row: PgRow) -> Result<AccountRecord, AdapterError> {
+    let user_id: String = row
+        .try_get("user_id")
+        .or_else(|_| row.try_get("userId"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let account_id: String = row
+        .try_get("account_id")
+        .or_else(|_| row.try_get("accountId"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let provider_id: String = row
+        .try_get("provider_id")
+        .or_else(|_| row.try_get("providerId"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let access_token: Option<String> = row
+        .try_get("access_token")
+        .ok()
+        .or_else(|| row.try_get("accessToken").ok())
+        .flatten();
+    let refresh_token: Option<String> = row
+        .try_get("refresh_token")
+        .ok()
+        .or_else(|| row.try_get("refreshToken").ok())
+        .flatten();
+    let id_token: Option<String> = row
+        .try_get("id_token")
+        .ok()
+        .or_else(|| row.try_get("idToken").ok())
+        .flatten();
+    let access_token_expires_at = row
+        .try_get("access_token_expires_at")
+        .ok()
+        .or_else(|| row.try_get("accessTokenExpiresAt").ok())
+        .flatten();
+    let refresh_token_expires_at = row
+        .try_get("refresh_token_expires_at")
+        .ok()
+        .or_else(|| row.try_get("refreshTokenExpiresAt").ok())
+        .flatten();
+    let created_at = row
+        .try_get("created_at")
+        .or_else(|_| row.try_get("createdAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let updated_at = row
+        .try_get("updated_at")
+        .or_else(|_| row.try_get("updatedAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+
     Ok(AccountRecord {
         id: row
             .try_get("id")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        user_id: row
-            .try_get("user_id")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        account_id: row
-            .try_get("account_id")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        provider_id: row
-            .try_get("provider_id")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        access_token: row
-            .try_get("access_token")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        refresh_token: row
-            .try_get("refresh_token")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        id_token: row
-            .try_get("id_token")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        access_token_expires_at: row
-            .try_get("access_token_expires_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        refresh_token_expires_at: row
-            .try_get("refresh_token_expires_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        user_id,
+        account_id,
+        provider_id,
+        access_token,
+        refresh_token,
+        id_token,
+        access_token_expires_at,
+        refresh_token_expires_at,
         scope: row
             .try_get("scope")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
         password: row
             .try_get("password")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        created_at: row
-            .try_get("created_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        updated_at: row
-            .try_get("updated_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        created_at,
+        updated_at,
     })
 }
 
 fn map_verification_row(row: PgRow) -> Result<VerificationRecord, AdapterError> {
+    let expires_at = row
+        .try_get("expires_at")
+        .or_else(|_| row.try_get("expiresAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let created_at = row
+        .try_get("created_at")
+        .or_else(|_| row.try_get("createdAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+    let updated_at = row
+        .try_get("updated_at")
+        .or_else(|_| row.try_get("updatedAt"))
+        .map_err(|e| AdapterError::Query(e.to_string()))?;
+
     Ok(VerificationRecord {
         id: row
             .try_get("id")
@@ -130,15 +205,9 @@ fn map_verification_row(row: PgRow) -> Result<VerificationRecord, AdapterError> 
         value: row
             .try_get("value")
             .map_err(|e| AdapterError::Query(e.to_string()))?,
-        expires_at: row
-            .try_get("expires_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        created_at: row
-            .try_get("created_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
-        updated_at: row
-            .try_get("updated_at")
-            .map_err(|e| AdapterError::Query(e.to_string()))?,
+        expires_at,
+        created_at,
+        updated_at,
     })
 }
 
@@ -146,16 +215,34 @@ fn map_verification_row(row: PgRow) -> Result<VerificationRecord, AdapterError> 
 #[derive(Clone)]
 pub struct PostgresAuthAdapter {
     pool: PgPool,
+    naming: NamingConvention,
 }
 
 impl PostgresAuthAdapter {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            naming: NamingConvention::SnakeCase,
+        }
     }
 
-    /// Executes the embedded Better Auth schema migration and idempotently upgrades older tables.
+    pub fn with_naming_convention(mut self, naming: NamingConvention) -> Self {
+        self.naming = naming;
+        self
+    }
+
+    pub fn naming_convention(&self) -> NamingConvention {
+        self.naming
+    }
+
+    /// Executes the embedded Better Auth schema migration.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
         sqlx::raw_sql(POSTGRES_SCHEMA).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Executes declarative Admin plugin migrations adding role, ban, and impersonation columns.
+    pub async fn run_admin_migrations(&self) -> Result<(), sqlx::Error> {
         for stmt in [
             r#"ALTER TABLE "user" ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'"#,
             r#"ALTER TABLE "user" ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT FALSE"#,
@@ -407,6 +494,125 @@ impl AuthAdapter for PostgresAuthAdapter {
                 }
                 Err(e) => Err(AdapterError::Query(e.to_string())),
             }
+        })
+    }
+
+    fn create_user_with_account(
+        &self,
+        user_input: CreateUserInput,
+        mut account_input: CreateAccountInput,
+    ) -> BoxFuture<'static, Result<(UserRecord, AccountRecord), AdapterError>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            let id = user_input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let email = user_input.email.to_lowercase();
+            let now = OffsetDateTime::now_utc();
+            let role = user_input.role.unwrap_or_else(|| "user".to_string());
+
+            let user_res = sqlx::query(
+                r#"
+                INSERT INTO "user" (id, name, email, email_verified, image, role, banned, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7, $8)
+                "#,
+            )
+            .bind(&id)
+            .bind(&user_input.name)
+            .bind(&email)
+            .bind(user_input.email_verified)
+            .bind(&user_input.image)
+            .bind(&role)
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await;
+
+            if let Err(sqlx::Error::Database(e)) = &user_res {
+                if e.is_unique_violation() {
+                    return Err(AdapterError::UniqueViolation(e.message().to_string()));
+                }
+            }
+            user_res.map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            if account_input.user_id.is_empty() {
+                account_input.user_id = id.clone();
+            }
+            if account_input.account_id.is_empty() {
+                account_input.account_id = id.clone();
+            }
+
+            let acc_id = account_input.id.unwrap_or_else(|| Uuid::now_v7().to_string());
+            let acc_res = sqlx::query(
+                r#"
+                INSERT INTO "account" (
+                    id, user_id, account_id, provider_id, access_token, refresh_token,
+                    id_token, access_token_expires_at, refresh_token_expires_at, scope,
+                    password, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                "#,
+            )
+            .bind(&acc_id)
+            .bind(&account_input.user_id)
+            .bind(&account_input.account_id)
+            .bind(&account_input.provider_id)
+            .bind(&account_input.access_token)
+            .bind(&account_input.refresh_token)
+            .bind(&account_input.id_token)
+            .bind(account_input.access_token_expires_at)
+            .bind(account_input.refresh_token_expires_at)
+            .bind(&account_input.scope)
+            .bind(&account_input.password)
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await;
+
+            if let Err(sqlx::Error::Database(e)) = &acc_res {
+                if e.is_unique_violation() {
+                    return Err(AdapterError::UniqueViolation(e.message().to_string()));
+                }
+            }
+            acc_res.map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            tx.commit()
+                .await
+                .map_err(|e| AdapterError::Query(e.to_string()))?;
+
+            let user = UserRecord {
+                id,
+                name: user_input.name,
+                email,
+                email_verified: user_input.email_verified,
+                image: user_input.image,
+                created_at: now,
+                updated_at: now,
+                role: Some(role),
+                banned: false,
+                ban_reason: None,
+                ban_expires: None,
+            };
+
+            let account = AccountRecord {
+                id: acc_id,
+                user_id: account_input.user_id,
+                account_id: account_input.account_id,
+                provider_id: account_input.provider_id,
+                access_token: account_input.access_token,
+                refresh_token: account_input.refresh_token,
+                id_token: account_input.id_token,
+                access_token_expires_at: account_input.access_token_expires_at,
+                refresh_token_expires_at: account_input.refresh_token_expires_at,
+                scope: account_input.scope,
+                password: account_input.password,
+                created_at: now,
+                updated_at: now,
+            };
+
+            Ok((user, account))
         })
     }
 

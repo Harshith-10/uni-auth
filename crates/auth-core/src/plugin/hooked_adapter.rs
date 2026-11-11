@@ -75,6 +75,42 @@ impl AuthAdapter for HookedAdapter {
         })
     }
 
+    fn create_user_with_account(
+        &self,
+        user_input: CreateUserInput,
+        account_input: CreateAccountInput,
+    ) -> BoxFuture<'static, Result<(UserRecord, AccountRecord), AdapterError>> {
+        let inner = self.inner.clone();
+        let hooks = self.hooks.clone();
+        Box::pin(async move {
+            let mut current = user_input;
+            for hook in &hooks {
+                match hook.before_create_user(current, &*inner).await {
+                    Ok(HookOutcome::Continue(val)) | Ok(HookOutcome::Modified(val)) => {
+                        current = val;
+                    }
+                    Ok(HookOutcome::Cancel) => {
+                        return Err(AdapterError::Auth(Box::new(AuthError::forbidden(
+                            "HOOK_CANCELLED",
+                            "User creation cancelled by database hook",
+                        ))));
+                    }
+                    Err(err) => return Err(AdapterError::Auth(Box::new(err))),
+                }
+            }
+
+            let (user, account) = inner.create_user_with_account(current, account_input).await?;
+
+            for hook in &hooks {
+                if let Err(err) = hook.after_create_user(&user, &*inner).await {
+                    return Err(AdapterError::Auth(Box::new(err)));
+                }
+            }
+
+            Ok((user, account))
+        })
+    }
+
     fn find_user_by_id(
         &self,
         id: &str,
@@ -185,7 +221,12 @@ impl AuthAdapter for HookedAdapter {
                 for hook in &hooks {
                     match hook.before_delete_user(user, &*inner).await {
                         Ok(true) => {}
-                        Ok(false) => return Ok(()),
+                        Ok(false) => {
+                            return Err(AdapterError::Auth(Box::new(AuthError::forbidden(
+                                "HOOK_CANCELLED",
+                                "User deletion cancelled by database hook",
+                            ))));
+                        }
                         Err(err) => return Err(AdapterError::Auth(Box::new(err))),
                     }
                 }

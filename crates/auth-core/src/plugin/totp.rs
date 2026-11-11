@@ -45,15 +45,20 @@ impl TotpValidator {
 
     /// Verifies a TOTP code allowing a `+-1` time-step drift window.
     pub fn verify(&self, secret: &[u8], code: &str) -> bool {
+        use subtle::ConstantTimeEq;
+        let code_trimmed = code.trim();
         let now_secs = OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
+        let mut valid = false;
         for step_offset in [-1i64, 0, 1] {
             let ts = (now_secs as i64 + step_offset * (self.period_secs as i64)).max(0) as u64;
             let expected = self.generate_at(secret, ts);
-            if expected == code.trim() {
-                return true;
+            if expected.len() == code_trimmed.len()
+                && bool::from(expected.as_bytes().ct_eq(code_trimmed.as_bytes()))
+            {
+                valid = true;
             }
         }
-        false
+        valid
     }
 }
 
