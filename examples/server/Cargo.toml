@@ -1,18 +1,19 @@
 [package]
 name = "uni-auth-server"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Example Axum backend serving /api/auth/* for both web and GPUI desktop clients"
 
 [lints]
 workspace = true
 
 [dependencies]
-auth-core = { workspace = true }
-auth-proto = { workspace = true }
-auth-axum = { workspace = true }
-auth-sqlx = { workspace = true }
+uni-auth-core = { workspace = true }
+uni-auth-proto = { workspace = true }
+uni-auth-axum = { workspace = true }
+uni-auth-sqlx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 axum = { workspace = true }

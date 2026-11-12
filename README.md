@@ -29,15 +29,17 @@ A modular, high-performance, cross-platform authentication engine and toolkit fo
 ```
 uni-auth/
 ├── crates/
-│   ├── auth-proto      # Shared wire DTOs, camelCase serde models, and error envelopes
-│   ├── auth-core       # Headless domain engine: hashing, sessions, RBAC, plugins, and hooks
-│   ├── auth-sqlx       # SQLite and PostgreSQL adapters with migrations and naming strategies
-│   ├── auth-axum       # Axum 0.8 HTTP routes (/api/auth/*), middleware, extractors, and CORS
-│   └── auth-client     # Native client SDK with OS keychain storage and loopback OAuth
+│   ├── uni-auth        # Umbrella facade crate re-exporting core modules with feature flags
+│   ├── uni-auth-proto  # Shared wire DTOs, camelCase serde models, and error envelopes
+│   ├── uni-auth-core   # Headless domain engine: hashing, sessions, RBAC, plugins, and hooks
+│   ├── uni-auth-sqlx   # SQLite and PostgreSQL adapters with migrations and naming strategies
+│   ├── uni-auth-axum   # Axum 0.8 HTTP routes (/api/auth/*), middleware, extractors, and CORS
+│   └── uni-auth-client # Native client SDK with OS keychain storage and loopback OAuth
 ├── examples/
 │   ├── server          # Standalone Axum backend server with demo SaaS endpoints
 │   ├── web-react       # React + Vite client illustrating browser cookie authentication
 │   └── desktop-gpui    # Native desktop GUI built with GPUI and OS Keychain storage
+├── xtask/              # Release automation & conventional commit semver calculator
 └── tests/              # Parity and cross-platform integration test suites
 ```
 
@@ -45,11 +47,12 @@ uni-auth/
 
 | Crate | Description |
 |---|---|
-| [`auth-proto`](crates/auth-proto) | Wire models and request/response envelopes conforming to camelCase JSON conventions. Defines `UserWire`, `SessionWire`, `AccountWire`, and typed error envelopes. |
-| [`auth-core`](crates/auth-core) | Pure headless domain engine. Encapsulates `AuthService`, `AuthAdapter` trait, cryptographic token signing (`crypto`), password hashing (`Argon2id` + legacy `Scrypt`), plugin system (`AuthPlugin`), and database lifecycle hooks (`DatabaseHooks`). |
-| [`auth-sqlx`](crates/auth-sqlx) | Production database adapters built on SQLx 0.8 for SQLite (`SqliteAuthAdapter`) and PostgreSQL (`PostgresAuthAdapter`). Includes embedded schema migrations and configurable `NamingConvention`. |
-| [`auth-axum`](crates/auth-axum) | Axum 0.8 integration providing `/api/auth/*` routes, session extractors (`CurrentSession`, `FreshSession`), CSRF protection, rate limiting, and cookie handling. |
-| [`auth-client`](crates/auth-client) | Native client SDK (`AuthClient`) featuring pluggable token storage, OS Keychain persistence (`KeyringTokenStorage`), reactive session events (`AuthStore`), and desktop loopback OAuth listeners. |
+| [`uni-auth`](crates/uni-auth) | Top-level umbrella crate providing batteries-included access to `core`, `proto`, and optional `axum`, `sqlx`, and `client` features. |
+| [`uni-auth-proto`](crates/uni-auth-proto) | Wire models and request/response envelopes conforming to camelCase JSON conventions. Defines `UserWire`, `SessionWire`, `AccountWire`, and typed error envelopes. |
+| [`uni-auth-core`](crates/uni-auth-core) | Pure headless domain engine. Encapsulates `AuthService`, `AuthAdapter` trait, cryptographic token signing (`crypto`), password hashing (`Argon2id` + legacy `Scrypt`), plugin system (`AuthPlugin`), and database lifecycle hooks (`DatabaseHooks`). |
+| [`uni-auth-sqlx`](crates/uni-auth-sqlx) | Production database adapters built on SQLx 0.8 for SQLite (`SqliteAuthAdapter`) and PostgreSQL (`PostgresAuthAdapter`). Includes embedded schema migrations and configurable `NamingConvention`. |
+| [`uni-auth-axum`](crates/uni-auth-axum) | Axum 0.8 integration providing `/api/auth/*` routes, session extractors (`CurrentSession`, `FreshSession`), CSRF protection, rate limiting, and cookie handling. |
+| [`uni-auth-client`](crates/uni-auth-client) | Native client SDK (`AuthClient`) featuring pluggable token storage, OS Keychain persistence (`KeyringTokenStorage`), reactive session events (`AuthStore`), and desktop loopback OAuth listeners. |
 
 ---
 
@@ -133,9 +136,9 @@ use std::sync::Arc;
 use time::Duration;
 use tokio::net::TcpListener;
 use axum::Router;
-use auth_axum::{AuthState, auth_routes_with_plugins, build_auth_cors_layer};
-use auth_core::{AuthConfig, AuthService};
-use auth_sqlx::SqliteAuthAdapter;
+use uni_auth_axum::{AuthState, auth_routes_with_plugins, build_auth_cors_layer};
+use uni_auth_core::{AuthConfig, AuthService};
+use uni_auth_sqlx::SqliteAuthAdapter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -179,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use auth_axum::CurrentSession;
+use uni_auth_axum::CurrentSession;
 
 async fn protected_profile(session: CurrentSession) -> Response {
     Json(serde_json::json!({
@@ -195,7 +198,7 @@ async fn protected_profile(session: CurrentSession) -> Response {
 
 ```rust
 use std::sync::Arc;
-use auth_client::{AuthClient, AuthStore, KeyringTokenStorage};
+use uni_auth_client::{AuthClient, AuthStore, KeyringTokenStorage};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -242,6 +245,32 @@ Run the Node.js protocol compatibility verification test:
 
 ```bash
 node tests/node_compat_test.mjs
+```
+
+---
+
+## Releasing & Versioning
+
+The project includes built-in release automation that calculates the next semver increment from Conventional Commits, updates workspace manifests and changelogs, tags the release, and publishes in topological dependency order.
+
+### Single-Command Release
+
+```bash
+# Auto-increments version from git commits, updates manifests & CHANGELOG.md, commits, and tags
+cargo release-workspace
+
+# Or using the root helper scripts:
+./release.ps1        # PowerShell (Windows)
+./release.sh         # Bash (Linux / macOS)
+
+# Preview the release without modifying any files or git state:
+cargo release-workspace --dry-run
+
+# Commit, tag, and push to origin (triggers GitHub Actions automated crates.io publish):
+cargo release-workspace --push
+
+# Or publish directly from the local terminal:
+cargo release-workspace --publish
 ```
 
 ---

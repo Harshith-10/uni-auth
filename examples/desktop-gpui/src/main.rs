@@ -1,4 +1,4 @@
-use auth_client::{AuthClient, AuthStore, KeyringTokenStorage};
+use uni_auth_client::{AuthClient, AuthStore, KeyringTokenStorage};
 use desktop_gpui::{DesktopAuthApp, tokio_handle};
 use gpui_kit::{AppContext, Bounds, Point, Size, WindowBounds, WindowOptions, px};
 use std::sync::Arc;

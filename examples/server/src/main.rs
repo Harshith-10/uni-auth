@@ -13,12 +13,12 @@ use time::Duration;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use auth_axum::{
+use uni_auth_axum::{
     AuthState, CurrentSession, OAuthProviderConfig, auth_routes_with_plugins, build_auth_cors_layer,
 };
-use auth_core::{AdminUpdateUserFields, AuthConfig, AuthService};
-use auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
-use auth_sqlx::SqliteAuthAdapter;
+use uni_auth_core::{AdminUpdateUserFields, AuthConfig, AuthService};
+use uni_auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
+use uni_auth_sqlx::SqliteAuthAdapter;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};

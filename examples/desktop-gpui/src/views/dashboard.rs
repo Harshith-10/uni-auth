@@ -1,4 +1,4 @@
-use auth_proto::{SessionWire, UserWire};
+use uni_auth_proto::{SessionWire, UserWire};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::dialog::{

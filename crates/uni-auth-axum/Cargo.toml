@@ -1,0 +1,43 @@
+[package]
+name = "uni-auth-axum"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+description = "Axum HTTP router exposing auth API routes with dual Cookie/Bearer auth"
+readme = "../../README.md"
+keywords = ["auth", "axum", "middleware", "oauth", "cookies"]
+categories = ["authentication", "web-programming::http-server"]
+
+[lints]
+workspace = true
+
+[dependencies]
+uni-auth-core = { workspace = true }
+uni-auth-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+oauth2 = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tower-service = { workspace = true }
+uni-auth-sqlx = { workspace = true }

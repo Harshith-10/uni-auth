@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use auth_client::{AuthStatus, AuthStore, ClientError};
-use auth_proto::{AdminCreateUserRequest, AdminListUsersQuery, RoleValue, SessionWire, UserWire};
+use uni_auth_client::{AuthStatus, AuthStore, ClientError};
+use uni_auth_proto::{AdminCreateUserRequest, AdminListUsersQuery, RoleValue, SessionWire, UserWire};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _, h_flex,

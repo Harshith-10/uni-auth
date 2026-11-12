@@ -1,0 +1,37 @@
+[package]
+name = "uni-auth-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+description = "Native Rust auth client for GPUI-Kit desktop apps: reqwest + keyring + loopback OAuth"
+readme = "../../README.md"
+keywords = ["auth", "client", "keyring", "oauth", "desktop"]
+categories = ["authentication", "api-bindings"]
+
+[lints]
+workspace = true
+
+[dependencies]
+uni-auth-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+keyring = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+uni-auth-core = { workspace = true }
+uni-auth-axum = { workspace = true }
+uni-auth-sqlx = { workspace = true }
+axum = { workspace = true }

@@ -1,0 +1,361 @@
+//! Plugin architecture for `auth-axum` enabling dynamic route mounting, route collision validation,
+//! and request/response endpoint hooks.
+
+use std::sync::Arc;
+
+use axum::Router;
+use axum::extract::{Request, State};
+use axum::middleware::Next;
+use axum::response::Response;
+
+use uni_auth_core::plugin::EndpointHookContext;
+use uni_auth_core::{AdminPlugin, BearerPlugin, OneTimeTokenPlugin};
+
+use crate::state::AuthState;
+
+/// Declares an HTTP route descriptor for collision validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteDescriptor {
+    pub path: &'static str,
+    pub methods: &'static [&'static str],
+}
+
+impl RouteDescriptor {
+    pub const fn new(path: &'static str, methods: &'static [&'static str]) -> Self {
+        Self { path, methods }
+    }
+}
+
+/// Implemented by plugins that contribute routes to `auth-axum`.
+pub trait AxumAuthPlugin: Send + Sync {
+    /// Unique plugin identifier.
+    fn plugin_id(&self) -> &'static str;
+
+    /// Declared routes exposed by this plugin for collision detection.
+    fn declared_routes(&self) -> Vec<RouteDescriptor>;
+
+    /// Sub-router providing endpoint handlers for this plugin.
+    fn router(&self) -> Router<AuthState>;
+}
+
+/// Validates that no two plugins register conflicting `(path, method)` pairs.
+pub fn check_endpoint_conflicts(plugins: &[Arc<dyn AxumAuthPlugin>]) -> Result<(), String> {
+    let mut seen: std::collections::HashMap<(&'static str, &'static str), &'static str> =
+        std::collections::HashMap::new();
+
+    for plugin in plugins {
+        let plugin_id = plugin.plugin_id();
+        for route in plugin.declared_routes() {
+            for &method in route.methods {
+                if let Some(existing_plugin) = seen.get(&(route.path, method)) {
+                    return Err(format!(
+                        "Endpoint conflict: route '{}' [{}] registered by plugin '{}' conflicts with plugin '{}'",
+                        route.path, method, plugin_id, existing_plugin
+                    ));
+                }
+                seen.insert((route.path, method), plugin_id);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Tower middleware executing `on_before_endpoint` and `on_after_endpoint` plugin hooks.
+pub async fn endpoint_hooks_middleware(
+    State(state): State<AuthState>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    // Normalize path relative to /api/auth if not already stripped by nest()
+    let raw_path = req.uri().path();
+    let path = raw_path
+        .strip_prefix("/api/auth")
+        .filter(|p| !p.is_empty())
+        .unwrap_or(raw_path)
+        .to_string();
+    let method = req.method().as_str().to_string();
+
+    // CSRF Origin verification for mutating requests (POST, PUT, PATCH, DELETE) without Bearer header
+    let is_mutating = matches!(
+        *req.method(),
+        http::Method::POST | http::Method::PUT | http::Method::PATCH | http::Method::DELETE
+    );
+    let has_bearer = req
+        .headers()
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase().starts_with("bearer "))
+        .unwrap_or(false);
+
+    if is_mutating && !has_bearer {
+        if let Err(err) =
+            crate::middleware::verify_trusted_origin(req.headers(), &state.trusted_origins)
+        {
+            return crate::error::error_to_response(err);
+        }
+    }
+
+    // Enforce plugin rate limits before executing endpoint
+    let peer_ip = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip());
+    let client_ip = crate::extract::extract_client_ip(req.headers(), peer_ip, &state.trusted_proxies)
+        .unwrap_or_else(|| "local".to_string());
+    if let Err(err) = state.service.check_plugin_rate_limits(&path, &client_ip) {
+        return crate::error::error_to_response(err);
+    }
+
+    let mut ctx = EndpointHookContext {
+        path,
+        method,
+        request_headers: req.headers().clone(),
+        response_headers: http::HeaderMap::new(),
+        response_body: None,
+        new_session: None,
+    };
+
+    if let Err(err) = state
+        .service
+        .plugins()
+        .run_before_endpoint(&mut ctx, &state.service)
+        .await
+    {
+        return crate::error::error_to_response(err);
+    }
+
+    *req.headers_mut() = ctx.request_headers.clone();
+
+    let response = next.run(req).await;
+
+    // Only run after-hook processing if at least one plugin matches `ctx.path`
+    let has_after_hook = state
+        .service
+        .plugins()
+        .plugins()
+        .iter()
+        .any(|p| p.matches_after(&ctx.path));
+
+    if !has_after_hook {
+        return response;
+    }
+
+    ctx.response_headers = response.headers().clone();
+
+    // Extract NewSessionExt if a new session was issued during this request
+    if let Some(crate::state::NewSessionExt(ses, usr)) = response
+        .extensions()
+        .get::<crate::state::NewSessionExt>()
+        .cloned()
+    {
+        ctx.new_session = Some((ses, usr));
+    }
+
+    let (mut parts, body) = response.into_parts();
+    let is_json = parts
+        .headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("application/json"))
+        .unwrap_or(false);
+
+    let final_body = if is_json {
+        let body_bytes = match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
+            Ok(b) => {
+                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&b) {
+                    ctx.response_body = Some(val);
+                }
+                b
+            }
+            Err(_) => axum::body::Bytes::new(),
+        };
+
+        if let Err(err) = state
+            .service
+            .plugins()
+            .run_after_endpoint(&mut ctx, &state.service)
+            .await
+        {
+            return crate::error::error_to_response(err);
+        }
+
+        parts.headers = ctx.response_headers;
+
+        if let Some(modified_json) = ctx.response_body {
+            parts.headers.remove(http::header::CONTENT_LENGTH);
+            let vec = serde_json::to_vec(&modified_json).unwrap_or_else(|_| body_bytes.to_vec());
+            axum::body::Body::from(vec)
+        } else {
+            axum::body::Body::from(body_bytes)
+        }
+    } else {
+        // Gated: non-JSON responses do NOT buffer body into memory
+        if let Err(err) = state
+            .service
+            .plugins()
+            .run_after_endpoint(&mut ctx, &state.service)
+            .await
+        {
+            return crate::error::error_to_response(err);
+        }
+        parts.headers = ctx.response_headers;
+        body
+    };
+
+    Response::from_parts(parts, final_body)
+}
+
+/// Adapter allowing any `AxumAuthPlugin` to implement `PluginRouteProvider` from `auth-core`.
+pub struct AxumPluginRouteAdapter<P: AxumAuthPlugin> {
+    pub plugin: Arc<P>,
+}
+
+impl<P: AxumAuthPlugin + 'static> AxumPluginRouteAdapter<P> {
+    pub fn new(plugin: Arc<P>) -> Self {
+        Self { plugin }
+    }
+}
+
+impl<P: AxumAuthPlugin + 'static> uni_auth_core::plugin::PluginRouteProvider for AxumPluginRouteAdapter<P> {
+    fn route_plugin_id(&self) -> &'static str {
+        self.plugin.plugin_id()
+    }
+
+    fn build_router_any(&self, state_any: &dyn std::any::Any) -> Option<Box<dyn std::any::Any>> {
+        if let Some(_state) = state_any.downcast_ref::<AuthState>() {
+            Some(Box::new(self.plugin.router()))
+        } else {
+            None
+        }
+    }
+}
+
+impl AxumAuthPlugin for OneTimeTokenPlugin {
+    fn plugin_id(&self) -> &'static str {
+        "one-time-token"
+    }
+
+    fn declared_routes(&self) -> Vec<RouteDescriptor> {
+        vec![
+            RouteDescriptor::new("/one-time-token/generate", &["GET"]),
+            RouteDescriptor::new("/one-time-token/verify", &["POST"]),
+        ]
+    }
+
+    fn router(&self) -> Router<AuthState> {
+        Router::new()
+            .route(
+                "/one-time-token/generate",
+                axum::routing::get(crate::routes::one_time_token::generate_one_time_token),
+            )
+            .route(
+                "/one-time-token/verify",
+                axum::routing::post(crate::routes::one_time_token::verify_one_time_token),
+            )
+    }
+}
+
+impl AxumAuthPlugin for BearerPlugin {
+    fn plugin_id(&self) -> &'static str {
+        "bearer"
+    }
+
+    fn declared_routes(&self) -> Vec<RouteDescriptor> {
+        Vec::new()
+    }
+
+    fn router(&self) -> Router<AuthState> {
+        Router::new()
+    }
+}
+
+impl AxumAuthPlugin for AdminPlugin {
+    fn plugin_id(&self) -> &'static str {
+        "admin"
+    }
+
+    fn declared_routes(&self) -> Vec<RouteDescriptor> {
+        vec![
+            RouteDescriptor::new("/admin/set-role", &["POST"]),
+            RouteDescriptor::new("/admin/get-user", &["GET"]),
+            RouteDescriptor::new("/admin/create-user", &["POST"]),
+            RouteDescriptor::new("/admin/update-user", &["POST"]),
+            RouteDescriptor::new("/admin/list-users", &["GET"]),
+            RouteDescriptor::new("/admin/list-user-sessions", &["POST"]),
+            RouteDescriptor::new("/admin/ban-user", &["POST"]),
+            RouteDescriptor::new("/admin/unban-user", &["POST"]),
+            RouteDescriptor::new("/admin/impersonate-user", &["POST"]),
+            RouteDescriptor::new("/admin/stop-impersonating", &["POST"]),
+            RouteDescriptor::new("/admin/revoke-user-session", &["POST"]),
+            RouteDescriptor::new("/admin/revoke-user-sessions", &["POST"]),
+            RouteDescriptor::new("/admin/remove-user", &["POST"]),
+            RouteDescriptor::new("/admin/set-user-password", &["POST"]),
+            RouteDescriptor::new("/admin/has-permission", &["POST"]),
+        ]
+    }
+
+    fn router(&self) -> Router<AuthState> {
+        Router::new()
+            .route(
+                "/admin/set-role",
+                axum::routing::post(crate::routes::admin::set_role),
+            )
+            .route(
+                "/admin/get-user",
+                axum::routing::get(crate::routes::admin::get_user),
+            )
+            .route(
+                "/admin/create-user",
+                axum::routing::post(crate::routes::admin::create_user),
+            )
+            .route(
+                "/admin/update-user",
+                axum::routing::post(crate::routes::admin::admin_update_user),
+            )
+            .route(
+                "/admin/list-users",
+                axum::routing::get(crate::routes::admin::list_users),
+            )
+            .route(
+                "/admin/list-user-sessions",
+                axum::routing::post(crate::routes::admin::list_user_sessions),
+            )
+            .route(
+                "/admin/ban-user",
+                axum::routing::post(crate::routes::admin::ban_user),
+            )
+            .route(
+                "/admin/unban-user",
+                axum::routing::post(crate::routes::admin::unban_user),
+            )
+            .route(
+                "/admin/impersonate-user",
+                axum::routing::post(crate::routes::admin::impersonate_user),
+            )
+            .route(
+                "/admin/stop-impersonating",
+                axum::routing::post(crate::routes::admin::stop_impersonating),
+            )
+            .route(
+                "/admin/revoke-user-session",
+                axum::routing::post(crate::routes::admin::revoke_user_session),
+            )
+            .route(
+                "/admin/revoke-user-sessions",
+                axum::routing::post(crate::routes::admin::revoke_user_sessions),
+            )
+            .route(
+                "/admin/remove-user",
+                axum::routing::post(crate::routes::admin::remove_user),
+            )
+            .route(
+                "/admin/set-user-password",
+                axum::routing::post(crate::routes::admin::set_user_password),
+            )
+            .route(
+                "/admin/has-permission",
+                axum::routing::post(crate::routes::admin::user_has_permission),
+            )
+    }
+}

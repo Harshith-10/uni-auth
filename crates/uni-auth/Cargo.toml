@@ -1,0 +1,32 @@
+[package]
+name = "uni-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+description = "Modular, high-performance, cross-platform authentication engine and toolkit for Rust."
+readme = "../../README.md"
+keywords = ["auth", "authentication", "oauth", "security", "axum"]
+categories = ["authentication", "web-programming"]
+
+[lints]
+workspace = true
+
+[features]
+default = ["core", "proto"]
+core = ["dep:uni-auth-core"]
+proto = ["dep:uni-auth-proto"]
+axum = ["dep:uni-auth-axum"]
+client = ["dep:uni-auth-client"]
+sqlx = ["dep:uni-auth-sqlx"]
+
+[dependencies]
+uni-auth-proto = { workspace = true, optional = true }
+uni-auth-core = { workspace = true, optional = true }
+uni-auth-sqlx = { workspace = true, optional = true }
+uni-auth-axum = { workspace = true, optional = true }
+uni-auth-client = { workspace = true, optional = true }

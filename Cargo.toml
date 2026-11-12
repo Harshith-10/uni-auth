@@ -1,19 +1,27 @@
 [workspace]
 members = [
-    "crates/auth-proto",
-    "crates/auth-core",
-    "crates/auth-sqlx",
-    "crates/auth-axum",
-    "crates/auth-client",
+    "crates/uni-auth",
+    "crates/uni-auth-proto",
+    "crates/uni-auth-core",
+    "crates/uni-auth-sqlx",
+    "crates/uni-auth-axum",
+    "crates/uni-auth-client",
     "examples/server",
     "examples/desktop-gpui",
+    "xtask",
 ]
 resolver = "3"
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
+authors = ["Harshith <https://github.com/Harshith-10>"]
+repository = "https://github.com/Harshith-10/uni-auth"
+homepage = "https://github.com/Harshith-10/uni-auth"
+documentation = "https://docs.rs/uni-auth"
+readme = "README.md"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -79,8 +87,9 @@ keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync
 tower-service = "0.3"
 
 # Workspace crate cross-references
-auth-proto = { path = "crates/auth-proto" }
-auth-core = { path = "crates/auth-core" }
-auth-sqlx = { path = "crates/auth-sqlx" }
-auth-axum = { path = "crates/auth-axum" }
-auth-client = { path = "crates/auth-client" }
+uni-auth = { path = "crates/uni-auth", version = "0.1.0" }
+uni-auth-proto = { path = "crates/uni-auth-proto", version = "0.1.0" }
+uni-auth-core = { path = "crates/uni-auth-core", version = "0.1.0" }
+uni-auth-sqlx = { path = "crates/uni-auth-sqlx", version = "0.1.0" }
+uni-auth-axum = { path = "crates/uni-auth-axum", version = "0.1.0" }
+uni-auth-client = { path = "crates/uni-auth-client", version = "0.1.0" }

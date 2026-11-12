@@ -2,10 +2,10 @@ use std::sync::Arc;
 use time::Duration;
 use tokio::net::TcpListener;
 
-use auth_axum::{AuthState, auth_router};
-use auth_client::{AuthClient, AuthStatus, AuthStore, MockTokenStorage, TokenStorage};
-use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
-use auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
+use uni_auth_axum::{AuthState, auth_router};
+use uni_auth_client::{AuthClient, AuthStatus, AuthStore, MockTokenStorage, TokenStorage};
+use uni_auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
+use uni_auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
 use axum::Router;
 use desktop_gpui::{DashboardTab, DesktopAuthApp};
 use gpui_kit::component::Root;

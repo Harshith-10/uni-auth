@@ -512,102 +512,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "auth-axum"
-version = "0.1.0"
-dependencies = [
- "auth-core",
- "auth-proto",
- "auth-sqlx",
- "axum",
- "axum-extra",
- "base64 0.22.1",
- "http",
- "oauth2",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tower",
- "tower-http",
- "tower-service",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "auth-client"
-version = "0.1.0"
-dependencies = [
- "auth-axum",
- "auth-core",
- "auth-proto",
- "auth-sqlx",
- "axum",
- "keyring",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "auth-core"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "auth-proto",
- "base64 0.22.1",
- "hkdf",
- "hmac",
- "http",
- "rand 0.8.8",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tracing",
- "unicode-normalization",
- "uuid",
-]
-
-[[package]]
-name = "auth-proto"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "time",
- "uuid",
-]
-
-[[package]]
-name = "auth-sqlx"
-version = "0.1.0"
-dependencies = [
- "auth-core",
- "auth-proto",
- "sqlx",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1682,11 +1586,6 @@ dependencies = [
 name = "desktop-gpui"
 version = "0.1.0"
 dependencies = [
- "auth-axum",
- "auth-client",
- "auth-core",
- "auth-proto",
- "auth-sqlx",
  "axum",
  "gpui-kit",
  "open",
@@ -1696,6 +1595,11 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uni-auth-axum",
+ "uni-auth-client",
+ "uni-auth-core",
+ "uni-auth-proto",
+ "uni-auth-sqlx",
 ]
 
 [[package]]
@@ -8473,13 +8377,102 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
+name = "uni-auth"
+version = "0.1.0"
+dependencies = [
+ "uni-auth-axum",
+ "uni-auth-client",
+ "uni-auth-core",
+ "uni-auth-proto",
+ "uni-auth-sqlx",
+]
+
+[[package]]
+name = "uni-auth-axum"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-extra",
+ "base64 0.22.1",
+ "http",
+ "oauth2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "tracing",
+ "uni-auth-core",
+ "uni-auth-proto",
+ "uni-auth-sqlx",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "uni-auth-client"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "keyring",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tracing",
+ "uni-auth-axum",
+ "uni-auth-core",
+ "uni-auth-proto",
+ "uni-auth-sqlx",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "uni-auth-core"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "base64 0.22.1",
+ "hkdf",
+ "hmac",
+ "http",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tracing",
+ "uni-auth-proto",
+ "unicode-normalization",
+ "uuid",
+]
+
+[[package]]
+name = "uni-auth-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "uni-auth-server"
 version = "0.1.0"
 dependencies = [
- "auth-axum",
- "auth-core",
- "auth-proto",
- "auth-sqlx",
  "axum",
  "serde",
  "serde_json",
@@ -8489,6 +8482,24 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uni-auth-axum",
+ "uni-auth-core",
+ "uni-auth-proto",
+ "uni-auth-sqlx",
+]
+
+[[package]]
+name = "uni-auth-sqlx"
+version = "0.1.0"
+dependencies = [
+ "sqlx",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tracing",
+ "uni-auth-core",
+ "uni-auth-proto",
+ "uuid",
 ]
 
 [[package]]
@@ -9985,6 +9996,10 @@ name = "xmlwriter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
 
 [[package]]
 name = "y4m"
