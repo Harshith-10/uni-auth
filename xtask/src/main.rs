@@ -245,16 +245,18 @@ fn run_release(opts: ReleaseOptions) {
 
         // 9. Git Push if requested
         if opts.push {
-            println!("==> Pushing release commit and tags to origin...");
+            let branch = get_current_branch(&root).unwrap_or_else(|| "HEAD".to_string());
+            println!("==> Pushing commits on branch '{}' and release tags to origin (GitHub)...", branch);
             let push_status = Command::new("git")
-                .args(["push", "origin", "HEAD", "--tags"])
+                .args(["push", "origin", &branch, "--tags"])
                 .current_dir(&root)
                 .status()
                 .expect("Failed to git push");
             if !push_status.success() {
-                eprintln!("Warning: Failed to push commit and tags to origin.");
+                eprintln!("Warning: Failed to push branch '{}' and tags to origin.", branch);
+                eprintln!("You can push manually at any time using: git push origin {} --tags", branch);
             } else {
-                println!("==> Successfully pushed to origin. GitHub Actions release workflow triggered!");
+                println!("==> Successfully pushed to origin (GitHub)! GitHub Actions release workflow triggered.");
             }
         }
     }
@@ -374,6 +376,23 @@ fn update_cargo_toml_version(content: &str, old_version: &str, new_version: &str
     }
 
     output
+}
+
+fn get_current_branch(root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(root)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let branch = String::from_utf8(output.stdout).ok()?;
+        let trimmed = branch.trim();
+        if !trimmed.is_empty() && trimmed != "HEAD" {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
 }
 
 fn get_latest_git_tag(root: &Path) -> Option<String> {
