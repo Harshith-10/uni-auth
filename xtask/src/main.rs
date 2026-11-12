@@ -91,6 +91,10 @@ fn parse_release_args(args: &[String]) -> ReleaseOptions {
 
     for arg in args {
         match arg.as_str() {
+            "--help" | "-h" => {
+                print_help();
+                std::process::exit(0);
+            }
             "--dry-run" => opts.dry_run = true,
             "--publish" => opts.publish = true,
             "--push" => opts.push = true,
