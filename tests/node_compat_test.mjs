@@ -1,4 +1,4 @@
-// Node.js Client Wire Parity Test for Better Auth compatible Rust backend
+// Node.js Client Wire Parity Test for Rust auth backend
 
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:3001/api/auth";
 const SAAS_URL = process.env.SAAS_URL || "http://127.0.0.1:3001/api/saas/me";
@@ -179,7 +179,7 @@ async function run() {
     }
     console.log("   ✅ Re-signed in successfully!");
 
-    console.log("\n🎉 ALL BETTER-AUTH WIRE COMPATIBILITY TESTS PASSED WITH 0 ERRORS!\n");
+    console.log("\n🎉 ALL WIRE COMPATIBILITY TESTS PASSED WITH 0 ERRORS!\n");
 }
 
 run().catch((err) => {

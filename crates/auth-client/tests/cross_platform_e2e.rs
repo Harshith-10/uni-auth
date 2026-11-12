@@ -1,7 +1,7 @@
 //! Cross-platform End-to-End integration test.
 //!
 //! Verifies wire parity and concurrent multi-session interaction across platforms:
-//! 1. Web Client (Cookie transport mimicking React + official `@better-auth/client`).
+//! 1. Web Client (Cookie transport mimicking React web client).
 //! 2. Native Desktop Client (Bearer token + Keychain transport mimicking GPUI-Kit desktop app).
 //! 3. Dual-mode SaaS route (`GET /api/saas/me`) detecting Cookie vs Bearer transport.
 //! 4. Cross-platform session listing (`GET /api/auth/list-sessions`).
@@ -13,7 +13,7 @@ use time::Duration;
 use tokio::net::TcpListener;
 
 use auth_axum::{AuthState, CurrentSession, auth_routes};
-use auth_client::{AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage, TokenStorage};
+use auth_client::{AuthClient, AuthStatus, AuthStore, MockTokenStorage, TokenStorage};
 use auth_core::{AuthConfig, AuthService};
 use auth_proto::SessionWire;
 use auth_sqlx::SqliteAuthAdapter;
@@ -26,7 +26,7 @@ async fn saas_me(session: CurrentSession) -> Response {
     let transport = if session.is_bearer {
         "Bearer (Native Desktop / GPUI Keychain)"
     } else {
-        "Cookie (Web Browser / better-auth-client)"
+        "Cookie (Web Browser)"
     };
 
     let expires_at = session
@@ -54,7 +54,7 @@ async fn saas_me(session: CurrentSession) -> Response {
     .into_response()
 }
 
-/// Spawns an in-memory SQLite Axum server serving Better Auth routes and `/api/saas/me`.
+/// Spawns an in-memory SQLite Axum server serving auth routes and `/api/saas/me`.
 async fn spawn_test_server() -> (String, String) {
     let adapter = Arc::new(SqliteAuthAdapter::new_in_memory().await.unwrap());
     let config = AuthConfig {
@@ -135,7 +135,7 @@ async fn test_cross_platform_dual_session_and_invalidation() {
     assert_eq!(web_saas_data["status"], "authenticated");
     assert_eq!(
         web_saas_data["transport"],
-        "Cookie (Web Browser / better-auth-client)"
+        "Cookie (Web Browser)"
     );
     let web_session_id = web_saas_data["session"]["id"]
         .as_str()
@@ -146,7 +146,7 @@ async fn test_cross_platform_dual_session_and_invalidation() {
     // STEP 2: Desktop Client (Bearer + Keychain Transport) Signs In
     // =========================================================================
     let desktop_storage = Arc::new(MockTokenStorage::new());
-    let desktop_client = Arc::new(BetterAuthNativeClient::new(
+    let desktop_client = Arc::new(AuthClient::new(
         auth_base_url.clone(),
         Arc::clone(&desktop_storage) as Arc<dyn TokenStorage>,
     ));

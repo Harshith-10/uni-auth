@@ -5,7 +5,7 @@ use tokio::net::TcpListener;
 
 use auth_axum::{AuthState, auth_router};
 use auth_client::{
-    AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage, TokenStorage,
+    AuthStatus, AuthStore, AuthClient, MockTokenStorage, TokenStorage,
     start_loopback_listener,
 };
 use auth_core::models::AdminUpdateUserFields;
@@ -50,7 +50,7 @@ async fn start_test_server() -> (String, Arc<AuthService>) {
 async fn test_sign_up_and_token_storage() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(
+    let client = Arc::new(AuthClient::new(
         base_url,
         Arc::clone(&storage) as Arc<dyn TokenStorage>,
     ));
@@ -88,7 +88,7 @@ async fn test_session_restoration_on_fresh_client_instance() {
 
     // Client 1 signs in
     {
-        let client1 = Arc::new(BetterAuthNativeClient::new(
+        let client1 = Arc::new(AuthClient::new(
             base_url.clone(),
             Arc::clone(&storage) as Arc<dyn TokenStorage>,
         ));
@@ -104,7 +104,7 @@ async fn test_session_restoration_on_fresh_client_instance() {
     }
 
     // Client 2 boots up later sharing the same secure storage (simulating app relaunch)
-    let client2 = Arc::new(BetterAuthNativeClient::new(
+    let client2 = Arc::new(AuthClient::new(
         base_url,
         Arc::clone(&storage) as Arc<dyn TokenStorage>,
     ));
@@ -125,7 +125,7 @@ async fn test_session_restoration_on_fresh_client_instance() {
 async fn test_sign_out_clears_local_keyring_and_server_session() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(
+    let client = Arc::new(AuthClient::new(
         base_url,
         Arc::clone(&storage) as Arc<dyn TokenStorage>,
     ));
@@ -157,7 +157,7 @@ async fn test_sign_out_clears_local_keyring_and_server_session() {
 async fn test_loopback_listener_and_ott_exchange() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(
+    let client = Arc::new(AuthClient::new(
         base_url.clone(),
         Arc::clone(&storage) as Arc<dyn TokenStorage>,
     ));
@@ -196,7 +196,7 @@ async fn test_loopback_listener_and_ott_exchange() {
 
     // Fresh client on another machine / storage exchanges OTT
     let fresh_storage = Arc::new(MockTokenStorage::new());
-    let fresh_client = Arc::new(BetterAuthNativeClient::new(
+    let fresh_client = Arc::new(AuthClient::new(
         base_url,
         Arc::clone(&fresh_storage) as Arc<dyn TokenStorage>,
     ));
@@ -214,7 +214,7 @@ async fn test_loopback_listener_and_ott_exchange() {
 async fn test_auth_store_reactive_notifications() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(
+    let client = Arc::new(AuthClient::new(
         base_url,
         Arc::clone(&storage) as Arc<dyn TokenStorage>,
     ));
@@ -259,7 +259,7 @@ async fn test_auth_store_reactive_notifications() {
 async fn test_native_client_admin_operations_and_impersonation() {
     let (base_url, service) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(
+    let client = Arc::new(AuthClient::new(
         base_url,
         Arc::clone(&storage) as Arc<dyn TokenStorage>,
     ));

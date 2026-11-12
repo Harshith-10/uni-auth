@@ -52,7 +52,7 @@ pub enum ClientError {
 type SignalSubscriber = Box<dyn Fn(&str) + Send + Sync + 'static>;
 type SessionEventListener = Box<dyn Fn(&SessionSignalEvent) + Send + Sync + 'static>;
 
-/// Native Better Auth client designed for desktop and mobile applications.
+/// Native authentication client designed for desktop and mobile applications.
 ///
 /// Features:
 /// - Automated Bearer token injection (`Authorization: Bearer <token>`).
@@ -60,7 +60,7 @@ type SessionEventListener = Box<dyn Fn(&SessionSignalEvent) + Send + Sync + 'sta
 /// - Client plugin ecosystem (`AuthClientPlugin`) with interceptors and typed extensions (`client.admin()`, `client.one_time_token()`).
 /// - Reactive `$sessionSignal` listeners for automatic store updates.
 #[derive(Clone)]
-pub struct BetterAuthNativeClient {
+pub struct AuthClient {
     pub(crate) base_url: String,
     pub(crate) http: reqwest::Client,
     pub(crate) storage: Arc<dyn TokenStorage>,
@@ -69,7 +69,10 @@ pub struct BetterAuthNativeClient {
     pub(crate) session_event_subscribers: Arc<RwLock<Vec<SessionEventListener>>>,
 }
 
-impl BetterAuthNativeClient {
+/// Backward compatibility alias for `AuthClient`.
+pub type BetterAuthNativeClient = AuthClient;
+
+impl AuthClient {
     /// Initializes a new native auth client with default `AdminClientPlugin` and `OneTimeTokenClientPlugin`.
     ///
     /// # Arguments

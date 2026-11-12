@@ -1,4 +1,4 @@
-use auth_client::{AuthStore, BetterAuthNativeClient, KeyringTokenStorage};
+use auth_client::{AuthClient, AuthStore, KeyringTokenStorage};
 use desktop_gpui::{DesktopAuthApp, tokio_handle};
 use gpui_kit::{AppContext, Bounds, Point, Size, WindowBounds, WindowOptions, px};
 use std::sync::Arc;
@@ -29,7 +29,7 @@ fn main() {
         "com.uni-auth.desktop",
         "session_token",
     ));
-    let client = Arc::new(BetterAuthNativeClient::new(auth_base_url, storage));
+    let client = Arc::new(AuthClient::new(auth_base_url, storage));
     let store = AuthStore::new(client);
 
     gpui_kit::application()

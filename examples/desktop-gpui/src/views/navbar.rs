@@ -54,17 +54,13 @@ impl NavbarView {
                         v_flex()
                             .gap_0()
                             .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(div().font_bold().text_sm().child("Uni-Auth Desktop"))
-                                    .child(Tag::secondary().small().outline().child("GPUI Native")),
+                                div().font_bold().text_sm().child("Uni-Auth Desktop")
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(muted_fg)
-                                    .child("Better-Auth Native Engine"),
+                                    .child("Native Client"),
                             ),
                     )
                     .child(

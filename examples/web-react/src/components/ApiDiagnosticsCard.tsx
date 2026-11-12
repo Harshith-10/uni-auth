@@ -39,7 +39,7 @@ export function ApiDiagnosticsCard({ token, userRole }: ApiDiagnosticsCardProps)
     {
       method: "GET",
       path: "/api/auth/get-session",
-      desc: "Retrieves active session and user claims via Better-Auth protocol",
+      desc: "Retrieves active session and user claims",
       auth: "Session",
     },
     {

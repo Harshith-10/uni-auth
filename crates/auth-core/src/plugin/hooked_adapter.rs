@@ -1,6 +1,4 @@
 //! Hooked adapter executing registered `DatabaseHooks` around core data mutations.
-//!
-//! Directly mirrors Better Auth's `getWithHooks` (`packages/better-auth/src/db/with-hooks.ts`).
 
 use std::sync::Arc;
 use time::OffsetDateTime;

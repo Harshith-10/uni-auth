@@ -1,4 +1,4 @@
-//! Modular plugin architecture modeled directly on `@better-auth/core` (`packages/core/src/types/plugin.ts`).
+//! Modular plugin architecture for uni-auth.
 //!
 //! Provides first-class database lifecycle hooks (`DatabaseHooks`), endpoint hooks (`EndpointHookContext`),
 //! declarative migrations (`PluginMigration`), rate limiting rules (`PluginRateLimitRule`), and typed
@@ -62,7 +62,7 @@ impl<'a, T> From<BoxFuture<'a, Result<T, AuthError>>> for HookFuture<'a, T> {
 
 /// Trait for plugins that declare HTTP routes without requiring hardcoded downcasting.
 pub trait PluginRouteProvider: Send + Sync {
-    /// Unique plugin identifier matching `BetterAuthPlugin::id`.
+    /// Unique plugin identifier.
     fn route_plugin_id(&self) -> &'static str;
 
     /// Builds the plugin router for the given application state (passed as `&dyn Any`).
@@ -85,7 +85,7 @@ pub use one_time_token::{
 pub use registry::PluginRegistry;
 pub use totp::TotpValidator;
 
-/// Outcome of a `before` database hook (`packages/better-auth/src/db/with-hooks.ts:56-65`).
+/// Outcome of a `before` database hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookOutcome<T> {
     /// Proceed with the current value unchanged.
@@ -109,7 +109,7 @@ impl<T> HookOutcome<T> {
 /// Unified with `UpdateUserFields` to avoid fragmented update representations.
 pub type UserUpdatePatch = UpdateUserFields;
 
-/// Database lifecycle hooks matching `BetterAuthOptions["databaseHooks"]`.
+/// Database lifecycle hooks executed before and after database mutations.
 pub trait DatabaseHooks: Send + Sync {
     // ── User Hooks ──
 
@@ -219,7 +219,7 @@ pub struct PluginMigration {
     pub sqlite_ddl: &'static [&'static str],
 }
 
-/// Per-plugin rate limit rule (`packages/core/src/types/plugin.ts:150-156`).
+/// Per-plugin rate limit rule.
 #[derive(Clone)]
 pub struct PluginRateLimitRule {
     pub id: &'static str,
@@ -228,8 +228,8 @@ pub struct PluginRateLimitRule {
     pub path_matcher: fn(&str) -> bool,
 }
 
-/// Unified server-side plugin trait matching `@better-auth/core`'s `BetterAuthPlugin`.
-pub trait BetterAuthPlugin: Send + Sync + 'static {
+/// Unified server-side plugin trait for uni-auth extensions.
+pub trait AuthPlugin: Send + Sync + 'static {
     /// Unique plugin identifier (e.g., `"admin"`, `"one-time-token"`, `"bearer"`, `"two-factor"`).
     fn id(&self) -> &'static str;
 
@@ -283,9 +283,12 @@ pub trait BetterAuthPlugin: Send + Sync + 'static {
     }
 }
 
+/// Backward compatibility alias for `AuthPlugin`.
+pub use AuthPlugin as BetterAuthPlugin;
+
 /// Object-safe legacy plugin trait for hooking into `AuthService` authentication flows.
-#[deprecated(note = "Implement BetterAuthPlugin and DatabaseHooks instead")]
-pub trait AuthPlugin: Send + Sync {
+#[deprecated(note = "Implement AuthPlugin and DatabaseHooks instead")]
+pub trait LegacyAuthPlugin: Send + Sync {
     /// Unique plugin identifier (e.g. `"two-factor"`, `"api-key"`, `"organization"`).
     fn id(&self) -> &'static str;
 

@@ -1,4 +1,4 @@
-//! One-Time Token (OTT) authentication plugin matching upstream Better Auth (`packages/better-auth/src/plugins/one-time-token/index.ts`).
+//! One-Time Token (OTT) authentication plugin.
 //!
 //! Supports browser-to-desktop handoff with single-use atomic consumption, optional SHA-256 token hashing,
 //! configurable expiration, and automatic `set-ott` header issuance on new sessions.
@@ -13,7 +13,7 @@ use crate::adapter::{AuthAdapter, BoxFuture};
 use crate::crypto;
 use crate::error::AuthError;
 use crate::models::CreateVerificationInput;
-use crate::plugin::{BetterAuthPlugin, EndpointHookContext};
+use crate::plugin::{AuthPlugin, EndpointHookContext};
 use crate::service::AuthService;
 
 /// Storage hashing mode for OTT tokens in the database.
@@ -139,7 +139,7 @@ impl OneTimeTokenPlugin {
     }
 }
 
-impl BetterAuthPlugin for OneTimeTokenPlugin {
+impl AuthPlugin for OneTimeTokenPlugin {
     fn id(&self) -> &'static str {
         "one-time-token"
     }

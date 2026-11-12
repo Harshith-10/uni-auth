@@ -74,13 +74,13 @@ impl AuthFormView {
                         Tag::primary()
                             .small()
                             .outline()
-                            .child("Native GPUI • Better-Auth Protocol"),
+                            .child("Native GPUI • Uni-Auth Protocol"),
                     )
                     .child(
                         div()
                             .text_2xl()
                             .font_extrabold()
-                            .child("Universal Auth Portal"),
+                            .child("Uni-Auth Portal"),
                     )
                     .child(
                         div()

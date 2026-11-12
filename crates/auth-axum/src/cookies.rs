@@ -1,4 +1,4 @@
-//! Cookie utilities for Better Auth session management.
+//! Cookie utilities for session management.
 
 use axum::http::HeaderMap;
 
@@ -43,8 +43,7 @@ pub fn build_clear_session_cookie(name: &str, secure: bool, same_site: &str) -> 
 
 /// Extracts the session token from request `Cookie` headers.
 ///
-/// Checks both the primary cookie name (e.g. `better-auth.session_token`)
-/// and the secure prefixed version (`__Secure-better-auth.session_token`).
+/// Checks both the primary cookie name and standard fallback names.
 pub fn extract_cookie_token(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
     for cookie_header in headers.get_all(axum::http::header::COOKIE) {
         if let Ok(cookie_str) = cookie_header.to_str() {

@@ -126,7 +126,7 @@ impl AuthError {
         }
     }
 
-    /// Maps to Better Auth standard error code string.
+    /// Maps to standard error code string.
     pub fn error_code(&self) -> &'static str {
         match self {
             Self::UserNotFound => error_codes::USER_NOT_FOUND,

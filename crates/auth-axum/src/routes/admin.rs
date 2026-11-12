@@ -1,6 +1,4 @@
-//! Better Auth `admin` plugin HTTP endpoints (`/api/auth/admin/*`).
-//!
-//! Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/routes.ts`
+//! Admin plugin HTTP endpoints (`/api/auth/admin/*`).
 
 use axum::Json;
 use axum::extract::{Query, State};

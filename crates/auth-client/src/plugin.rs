@@ -1,6 +1,4 @@
-//! Client plugin architecture modeled on `@better-auth/client` (`packages/core/src/types/plugin-client.ts`).
-//!
-//! Enables modular extensions, request/response interceptors, and reactive `$sessionSignal` listeners.
+//! Client plugin architecture for modular extensions, request/response interceptors, and reactive session signals.
 
 use std::any::Any;
 
@@ -28,14 +26,14 @@ pub enum SessionSignalEvent {
     NeedsRefresh,
 }
 
-/// Reactive atom/signal listener rule (`packages/core/src/types/plugin-client.ts:31-35`).
+/// Reactive atom/signal listener rule.
 #[derive(Clone)]
 pub struct ClientSignalListener {
     pub signal: &'static str,
     pub matcher: fn(&str) -> bool,
 }
 
-/// Client-side plugin trait for extending `BetterAuthNativeClient`.
+/// Client-side plugin trait for extending `AuthClient`.
 pub trait AuthClientPlugin: Send + Sync + 'static {
     /// Unique client plugin ID (e.g. `"admin-client"`, `"one-time-token-client"`).
     fn id(&self) -> &'static str;
@@ -59,7 +57,7 @@ pub trait AuthClientPlugin: Send + Sync + 'static {
     }
 }
 
-/// Matches core session-mutating endpoint paths (`packages/better-auth/src/client/config.ts:42-55`).
+/// Matches core session-mutating endpoint paths.
 pub fn matches_core_session_signal(path: &str) -> bool {
     matches!(
         path,

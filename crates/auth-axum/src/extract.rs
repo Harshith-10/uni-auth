@@ -331,9 +331,7 @@ where
     }
 }
 
-/// Extractor that requires a valid AND fresh session (created within `session_fresh_age`).
-///
-/// Matches Better Auth's `freshSessionMiddleware` (`packages/better-auth/src/api/routes/session.ts:599-617`),
+/// Extractor that requires a valid AND fresh session (created within `session_fresh_age`),
 /// rejecting stale sessions with HTTP `403 Forbidden` and error code `SESSION_NOT_FRESH`.
 #[derive(Debug, Clone)]
 pub struct FreshSession(pub CurrentSession);

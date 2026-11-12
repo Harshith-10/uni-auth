@@ -1,4 +1,4 @@
-//! Better Auth `admin` client plugin matching upstream `packages/better-auth/src/plugins/admin/client.ts`.
+//! Admin client plugin for administrative operations and impersonation.
 //!
 //! Provides the `client.admin()` facade, local client-side role permission checks, automated admin session
 //! token stashing and restoration across impersonation lifecycles, and `$sessionSignal` integration.
@@ -18,7 +18,7 @@ use auth_proto::{
     AdminUserResponse, RoleValue, SessionAndUserResponse, StatusResponse, UserWire,
 };
 
-use crate::client::{BetterAuthNativeClient, ClientError};
+use crate::client::{AuthClient, ClientError};
 use crate::plugin::{AuthClientPlugin, ClientSignalListener, SESSION_SIGNAL};
 use crate::transport::{ClientRequestContext, ClientResponseContext};
 
@@ -111,13 +111,12 @@ impl AuthClientPlugin for AdminClientPlugin {
 
 /// Administrative namespace handle returned by `client.admin()`.
 pub struct AdminClientHandle<'a> {
-    client: &'a BetterAuthNativeClient,
+    client: &'a AuthClient,
     plugin: Option<&'a AdminClientPlugin>,
 }
 
 impl<'a> AdminClientHandle<'a> {
     /// Pure client-side role permission check without a network round-trip.
-    /// Parity with `authClient.admin.checkRolePermission` in TypeScript (`plugins/admin/client.ts:62-80`).
     pub fn check_role_permission(
         &self,
         role_csv: &str,
@@ -400,7 +399,7 @@ pub trait AdminClientExt {
     fn admin(&self) -> AdminClientHandle<'_>;
 }
 
-impl AdminClientExt for BetterAuthNativeClient {
+impl AdminClientExt for AuthClient {
     fn admin(&self) -> AdminClientHandle<'_> {
         AdminClientHandle {
             client: self,

@@ -71,26 +71,17 @@ export function Navbar({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-4">
         {/* Brand / Logo */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center size-8 bg-primary text-primary-foreground shadow-xs">
+          <Button size="icon-lg">
             <ShieldCheck className="size-4" />
-          </div>
+          </Button>
           <div className="flex items-center gap-2">
-            <span className="font-heading font-semibold text-sm tracking-tight">
+            <span className="font-heading font-semibold tracking-tight">
               Uni-Auth
             </span>
-            <Badge variant="outline" className="hidden sm:inline-flex text-[10px] font-mono px-1.5 py-0">
-              Axum + Better-Auth
+            <Badge variant="outline">
+              Safer Authentication
             </Badge>
           </div>
-        </div>
-
-        {/* Center / Status */}
-        <div className="hidden md:flex items-center gap-2 text-xs text-muted-foreground border border-border/60 px-2.5 py-1">
-          <span className="relative flex size-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
-          </span>
-          <span className="font-mono text-[11px]">Backend: localhost:3000</span>
         </div>
 
         {/* Right Actions */}
@@ -110,7 +101,7 @@ export function Navbar({
             )}
           </Button>
 
-          {user ? (
+          {user && (
             <div className="flex items-center gap-2">
               {impersonatedBy && (
                 <div className="hidden sm:flex items-center gap-1.5 bg-amber-500/10 text-amber-900 dark:text-amber-200 border border-amber-500/30 px-2 py-0.5 text-xs">
@@ -187,13 +178,6 @@ export function Navbar({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <Button size="sm" onClick={onOpenAuthModal} className="gap-1.5">
-                <User className="size-3.5" />
-                Sign In
-              </Button>
             </div>
           )}
         </div>

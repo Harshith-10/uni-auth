@@ -15,7 +15,7 @@ use auth_axum::plugin::{AxumAuthPlugin, RouteDescriptor, check_endpoint_conflict
 use auth_axum::{AuthState, auth_router};
 use auth_core::adapter::BoxFuture;
 use auth_core::error::AuthError;
-use auth_core::plugin::{BetterAuthPlugin, EndpointHookContext};
+use auth_core::plugin::{AuthPlugin, EndpointHookContext};
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
 
 // ──────────────────────────────────────────────
@@ -47,7 +47,7 @@ impl AxumAuthPlugin for PingPongPlugin {
 
 struct HeaderHookPlugin;
 
-impl BetterAuthPlugin for HeaderHookPlugin {
+impl AuthPlugin for HeaderHookPlugin {
     fn id(&self) -> &'static str {
         "header-hook"
     }

@@ -20,7 +20,7 @@ use crate::models::{
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Applies Better Auth `admin/list-users` search, filter, sort, and pagination rules to a user list.
+/// Applies `admin/list-users` search, filter, sort, and pagination rules to a user list.
 pub fn filter_and_paginate_users(
     users: impl IntoIterator<Item = UserRecord>,
     filter: &AdminListUsersFilter,
@@ -112,7 +112,7 @@ pub fn filter_and_paginate_users(
     (page, total)
 }
 
-/// Object-safe persistence adapter interface for Better Auth data models.
+/// Object-safe persistence adapter interface for auth data models.
 pub trait AuthAdapter: Send + Sync {
     // ── Users ──
     fn create_user(

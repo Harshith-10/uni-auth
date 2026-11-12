@@ -1,11 +1,11 @@
 //! # auth-proto
 //!
-//! Shared wire DTOs and camelCase serde models for BetterAuth-compatible Rust authentication.
+//! Shared wire DTOs and serialization models for uni-auth.
 //!
 //! This crate contains **no server dependencies** — only serialization types that are shared
 //! between the server (`auth-core`, `auth-axum`) and native client (`auth-client`).
 //!
-//! All JSON field names use `camelCase` to match the Better Auth TypeScript wire protocol.
+//! All JSON field names use `camelCase` for protocol interoperability.
 
 pub mod access;
 pub mod error;

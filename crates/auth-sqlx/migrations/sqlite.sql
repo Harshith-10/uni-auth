@@ -1,4 +1,4 @@
--- Better Auth SQLite Migration
+-- SQLite Migration
 -- Core Schema: user, session, account, verification
 
 PRAGMA foreign_keys = ON;

@@ -39,7 +39,6 @@ pub trait AxumAuthPlugin: Send + Sync {
 }
 
 /// Validates that no two plugins register conflicting `(path, method)` pairs.
-/// Parity with Better Auth's `checkEndpointConflicts` (`packages/better-auth/src/api/index.ts:58-171`).
 pub fn check_endpoint_conflicts(plugins: &[Arc<dyn AxumAuthPlugin>]) -> Result<(), String> {
     let mut seen: std::collections::HashMap<(&'static str, &'static str), &'static str> =
         std::collections::HashMap::new();

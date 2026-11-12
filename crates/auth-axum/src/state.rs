@@ -1,4 +1,4 @@
-//! Shared state for the Axum Better Auth router.
+//! Shared state for the Axum auth router.
 
 use auth_core::AuthService;
 use auth_core::models::{SessionRecord, UserRecord};

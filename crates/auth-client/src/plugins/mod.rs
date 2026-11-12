@@ -1,4 +1,4 @@
-//! Modular client plugins for `BetterAuthNativeClient`.
+//! Modular client plugins for `AuthClient`.
 
 pub mod admin;
 pub mod one_time_token;

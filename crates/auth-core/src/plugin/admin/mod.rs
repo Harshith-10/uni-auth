@@ -1,4 +1,4 @@
-//! Better Auth Admin plugin matching upstream `packages/better-auth/src/plugins/admin/admin.ts`.
+//! Admin plugin providing RBAC, user management, and impersonation.
 //!
 //! Provides RBAC permission checks, user management, impersonation, bans with auto-unban on expiration,
 //! session revocation, and endpoint filtering for `/list-sessions`.
@@ -12,7 +12,7 @@ use crate::adapter::{AuthAdapter, BoxFuture};
 use crate::error::AuthError;
 use crate::models::{AdminUpdateUserFields, CreateSessionInput, CreateUserInput, FieldUpdate};
 use crate::plugin::{
-    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookFuture, HookOutcome, PluginMigration,
+    AuthPlugin, DatabaseHooks, EndpointHookContext, HookFuture, HookOutcome, PluginMigration,
 };
 use crate::service::AuthService;
 
@@ -66,7 +66,7 @@ impl DatabaseHooks for AdminPlugin {
                 if user.banned {
                     if let Some(exp) = user.ban_expires {
                         if exp < OffsetDateTime::now_utc() {
-                            // Ban has expired: auto-unban the user per Better Auth parity
+                            // Ban has expired: auto-unban the user
                             let _ = adapter
                                 .update_user_admin(
                                     &user.id,
@@ -89,7 +89,7 @@ impl DatabaseHooks for AdminPlugin {
     }
 }
 
-impl BetterAuthPlugin for AdminPlugin {
+impl AuthPlugin for AdminPlugin {
     fn id(&self) -> &'static str {
         "admin"
     }

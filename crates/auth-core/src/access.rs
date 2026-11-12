@@ -1,6 +1,4 @@
-//! Shared resource-action Access Control engine for Better Auth plugins (`admin` and `organization`).
-//!
-//! Matches upstream `@better-auth/src/plugins/access` and `plugins/admin/access/statement.ts`.
+//! Shared resource-action Access Control engine for auth plugins (`admin` and `organization`).
 
 use std::collections::HashMap;
 use time::Duration;
@@ -8,9 +6,7 @@ use time::Duration;
 use crate::error::AuthError;
 pub use auth_proto::access::{AccessControl, Connector, RolePermissions};
 
-/// Configuration for the Better Auth `admin` plugin.
-///
-/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/admin.ts` lines 38-67
+/// Configuration for the `admin` plugin.
 #[derive(Debug, Clone)]
 pub struct AdminConfig {
     /// Default role assigned to newly created users. Default: `"user"`.
@@ -59,7 +55,6 @@ impl Default for AdminConfig {
 
 impl AdminConfig {
     /// Validates that all configured `admin_roles` exist in `ac.roles` (case-insensitive).
-    /// Parity with Better Auth's `admin.ts` lines 54-69.
     pub fn validate(&self) -> Result<(), AuthError> {
         for admin_role in &self.admin_roles {
             let exists = self
@@ -77,8 +72,6 @@ impl AdminConfig {
     }
 
     /// Evaluates whether a user (by `user_id` and/or comma-separated `role_csv`) has all requested permissions.
-    ///
-    /// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/has-permission.ts`
     pub fn has_permission_map(
         &self,
         user_id: Option<&str>,

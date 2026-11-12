@@ -236,7 +236,7 @@ impl PostgresAuthAdapter {
         self.naming
     }
 
-    /// Executes the embedded Better Auth schema migration.
+    /// Executes the embedded schema migration.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
         sqlx::raw_sql(POSTGRES_SCHEMA).execute(&self.pool).await?;
         Ok(())

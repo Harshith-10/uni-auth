@@ -234,7 +234,7 @@ export function AdminConsoleCard({
                       <div>
                         <DialogTitle className="text-sm font-semibold">Create New User</DialogTitle>
                         <DialogDescription className="text-xs">
-                          Provision an account directly via Better-Auth Admin API
+                          Provision an account directly via Admin API
                         </DialogDescription>
                       </div>
                     </div>

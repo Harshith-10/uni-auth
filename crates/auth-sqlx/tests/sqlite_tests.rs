@@ -662,10 +662,10 @@ async fn test_sqlite_camel_case_row_resilience() {
         .await
         .expect("In-memory SQLite should initialize");
 
-    // Manually create a table matching Better-Auth TypeScript camelCase conventions
+    // Manually create a table matching TypeScript camelCase conventions for interop
     sqlx::query(
         r#"
-        CREATE TABLE IF NOT EXISTS "better_auth_compat_user" (
+        CREATE TABLE IF NOT EXISTS "camel_case_compat_user" (
             id TEXT PRIMARY KEY NOT NULL,
             name TEXT NOT NULL,
             email TEXT NOT NULL UNIQUE,
@@ -682,7 +682,7 @@ async fn test_sqlite_camel_case_row_resilience() {
 
     sqlx::query(
         r#"
-        INSERT INTO "better_auth_compat_user" (id, name, email, "emailVerified", image, "createdAt", "updatedAt")
+        INSERT INTO "camel_case_compat_user" (id, name, email, "emailVerified", image, "createdAt", "updatedAt")
         VALUES ('u1', 'Camel User', 'camel@example.com', 1, NULL, '2026-11-12T00:00:00Z', '2026-11-12T00:00:00Z');
         "#,
     )
@@ -692,7 +692,7 @@ async fn test_sqlite_camel_case_row_resilience() {
 
     // Query row and ensure map_user_row decodes camelCase correctly
     let row = sqlx::query(
-        r#"SELECT id, name, email, "emailVerified", image, "createdAt", "updatedAt" FROM "better_auth_compat_user" WHERE id = 'u1'"#,
+        r#"SELECT id, name, email, "emailVerified", image, "createdAt", "updatedAt" FROM "camel_case_compat_user" WHERE id = 'u1'"#,
     )
     .fetch_one(adapter.pool())
     .await

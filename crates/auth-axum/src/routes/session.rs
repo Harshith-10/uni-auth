@@ -26,7 +26,7 @@ pub async fn get_session(
     let extracted = match extract_token_with_source(&headers, &state.cookie_name) {
         Some(t) => t,
         None => {
-            // Per Better Auth spec: returns 200 OK with null when unauthenticated
+            // Returns 200 OK with null when unauthenticated
             return (StatusCode::OK, Json(serde_json::Value::Null)).into_response();
         }
     };

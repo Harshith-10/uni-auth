@@ -1,10 +1,10 @@
-//! Better Auth `one-time-token` client plugin matching `packages/better-auth/src/plugins/one-time-token/client.ts`.
+//! One-Time Token (OTT) client plugin for cross-platform desktop/browser authentication handoff.
 
 use reqwest::Method;
 
 use auth_proto::{OneTimeTokenGenerateResponse, OneTimeTokenVerifyRequest, SessionAndUserResponse};
 
-use crate::client::{BetterAuthNativeClient, ClientError};
+use crate::client::{AuthClient, ClientError};
 use crate::plugin::{AuthClientPlugin, ClientSignalListener, SESSION_SIGNAL};
 
 /// Client plugin for one-time token workflows.
@@ -30,7 +30,7 @@ impl AuthClientPlugin for OneTimeTokenClientPlugin {
 
 /// One-time token namespace handle returned by `client.one_time_token()`.
 pub struct OneTimeTokenClientHandle<'a> {
-    client: &'a BetterAuthNativeClient,
+    client: &'a AuthClient,
 }
 
 impl<'a> OneTimeTokenClientHandle<'a> {
@@ -76,7 +76,7 @@ pub trait OneTimeTokenClientExt {
     fn one_time_token(&self) -> OneTimeTokenClientHandle<'_>;
 }
 
-impl OneTimeTokenClientExt for BetterAuthNativeClient {
+impl OneTimeTokenClientExt for AuthClient {
     fn one_time_token(&self) -> OneTimeTokenClientHandle<'_> {
         OneTimeTokenClientHandle { client: self }
     }

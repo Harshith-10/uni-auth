@@ -1,6 +1,5 @@
-//! Request payloads for all Better Auth v1 API routes and plugins.
+//! Request payloads for API routes and plugins.
 //!
-//! Each struct matches the Zod body/query schema from the upstream TypeScript source.
 //! Note: Better Auth uses `callbackURL`, `newUserCallbackURL`, and `errorCallbackURL`
 //! with uppercase `URL`, so explicit `#[serde(rename = ...)]` attributes are used.
 
@@ -24,8 +23,6 @@ where
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/sign-up/email`
-///
-/// Reference: `.reference/better-auth/.../sign-up.ts` lines 21-30
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignUpEmailRequest {
@@ -56,8 +53,6 @@ pub struct SignUpEmailRequest {
 }
 
 /// `POST /api/auth/sign-in/email`
-///
-/// Reference: `.reference/better-auth/.../sign-in.ts` lines 412-448
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignInEmailRequest {
@@ -85,8 +80,6 @@ pub struct SignInEmailRequest {
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/sign-in/social`
-///
-/// Reference: `.reference/better-auth/.../sign-in.ts` lines 31-195
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SignInSocialRequest {
@@ -131,8 +124,6 @@ pub struct SignInSocialRequest {
 }
 
 /// `POST /api/auth/link-social`
-///
-/// Reference: `.reference/better-auth/.../account.ts` lines 128-235
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkSocialRequest {
@@ -169,8 +160,6 @@ pub struct LinkSocialRequest {
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/request-password-reset`
-///
-/// Reference: `.reference/better-auth/.../password.ts` lines 40-65
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestPasswordResetRequest {
@@ -183,8 +172,6 @@ pub struct RequestPasswordResetRequest {
 }
 
 /// `POST /api/auth/reset-password`
-///
-/// Reference: `.reference/better-auth/.../password.ts` lines 234-254
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetPasswordRequest {
@@ -238,8 +225,6 @@ pub struct SendVerificationEmailRequest {
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/revoke-session`
-///
-/// Reference: `.reference/better-auth/.../session.ts` lines 677-685
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RevokeSessionRequest {
@@ -248,8 +233,6 @@ pub struct RevokeSessionRequest {
 }
 
 /// `POST /api/auth/sign-out`
-///
-/// Reference: `.reference/better-auth/.../sign-out.ts` lines 5-26
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignOutRequest {
@@ -271,8 +254,6 @@ pub struct SignOutRequest {
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/one-time-token/verify`
-///
-/// Reference: `.reference/better-auth/.../plugins/one-time-token/index.ts` lines 71-75
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OneTimeTokenVerifyRequest {
@@ -285,8 +266,6 @@ pub struct OneTimeTokenVerifyRequest {
 // ──────────────────────────────────────────────
 
 /// `POST /api/auth/unlink-account`
-///
-/// Reference: `.reference/better-auth/.../account.ts` lines 468-524
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnlinkAccountRequest {
@@ -294,14 +273,12 @@ pub struct UnlinkAccountRequest {
     #[serde(default)]
     pub provider_id: String,
 
-    /// Optional Better Auth account ID or provider account ID to unlink
+    /// Optional account ID or provider account ID to unlink
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
 }
 
 /// `POST /api/auth/update-user`
-///
-/// Reference: `.reference/better-auth/.../update-user.ts` lines 31-95
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateUserRequest {
@@ -345,8 +322,6 @@ pub struct DeleteUserRequest {
 // ──────────────────────────────────────────────
 
 /// Role specification accepting either a single role string (`"admin"`) or an array (`["admin", "user"]`).
-///
-/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/routes.ts` lines 57-76
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum RoleValue {

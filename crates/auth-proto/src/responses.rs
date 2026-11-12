@@ -1,4 +1,4 @@
-//! Response payloads for Better Auth v1 API routes and plugins.
+//! Response payloads for API routes and plugins.
 //!
 //! All structs use `camelCase` for JSON serialization to match Better Auth TypeScript conventions.
 
@@ -45,7 +45,7 @@ pub struct StatusMessageResponse {
     pub message: String,
 }
 
-/// Matches Better Auth `POST /delete-user` response (`{ "success": true, "message": "User deleted" }`)
+/// Response for `POST /delete-user` (`{ "success": true, "message": "User deleted" }`)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteUserResponse {
@@ -60,8 +60,6 @@ pub struct DeleteUserResponse {
 /// `POST /api/auth/sign-up/email` response.
 ///
 /// If auto-sign-in is disabled or email verification is required, `token` will be `None`.
-///
-/// Reference: `.reference/better-auth/.../sign-up.ts` lines 55-58, 442-448
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SignUpResponse {
@@ -73,8 +71,6 @@ pub struct SignUpResponse {
 }
 
 /// `POST /api/auth/sign-in/email` response.
-///
-/// Reference: `.reference/better-auth/.../sign-in.ts` lines 461-466, 635-643
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SignInResponse {
@@ -95,8 +91,6 @@ pub struct SignInResponse {
 /// `GET/POST /api/auth/get-session` and `POST /api/auth/one-time-token/verify` response.
 ///
 /// When the request is unauthenticated, `/get-session` returns HTTP 200 with JSON `null`.
-///
-/// Reference: `.reference/better-auth/.../session.ts` lines 68-71
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAndUserResponse {
@@ -122,8 +116,6 @@ pub struct SignInSocialResponse {
 }
 
 /// `POST /api/auth/sign-out` response.
-///
-/// Reference: `.reference/better-auth/.../sign-out.ts` lines 28-34
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SignOutResponse {

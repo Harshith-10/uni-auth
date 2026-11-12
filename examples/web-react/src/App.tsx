@@ -185,10 +185,6 @@ export function App() {
     setAuthTab("signin");
     setEmail(demoEmail);
     setPassword(demoPassword);
-    setMessage({
-      type: "default",
-      text: `Populated credentials for ${demoEmail}. Click "Sign In" to authenticate.`,
-    });
   };
 
   // Sign up
@@ -419,7 +415,7 @@ export function App() {
           <div className="space-y-1">
             <h2 className="text-sm font-semibold">Connecting to Uni-Auth</h2>
             <p className="text-xs text-muted-foreground">
-              Verifying Better-Auth session with Axum backend...
+              Verifying session with Axum backend...
             </p>
           </div>
         </div>
@@ -429,7 +425,6 @@ export function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground antialiased selection:bg-primary/20 selection:text-primary">
-      {/* 1. REWORKED SHADCN HEADER */}
       <Navbar
         session={session}
         isAdmin={isAdmin}
@@ -447,10 +442,10 @@ export function App() {
       />
 
       {/* 2. MAIN APPLICATION CONTAINER */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <main className="flex-1 flex flex-col items-center max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Global notification alert if present */}
         {message && (
-          <Alert variant={message.type} className="animate-in fade-in duration-200">
+          <Alert variant={message.type} className="max-w-md animate-in fade-in duration-200">
             {message.type === "destructive" ? (
               <AlertCircle className="size-4" />
             ) : (
@@ -592,7 +587,7 @@ export function App() {
             <div className="text-center space-y-2.5 max-w-lg mx-auto">
               <Badge variant="outline" className="gap-1.5 font-mono text-[11px] px-2 py-0.5">
                 <Sparkles className="size-3 text-primary" />
-                Rust Axum + Better-Auth Protocol
+                Rust Backend + Better-Auth Client
               </Badge>
               <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight font-heading">
                 Uni-Auth Web Portal
@@ -648,12 +643,11 @@ export function App() {
       <footer className="border-t py-4 text-center text-xs text-muted-foreground mt-auto">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-foreground">Uni-Auth</span>
-            <span>&bull;</span>
-            <span>Axum Backend + Better-Auth Client</span>
+            <span className="font-semibold text-foreground">Uni-Auth Backend</span>
+            <span>+ Better-Auth Client</span>
           </div>
           <div className="flex items-center gap-4 text-[11px]">
-            <span>Base UI &bull; Tailwind CSS &bull; shadcn</span>
+            <span>BETTER-AUTH &bull; Base UI &bull; Tailwind CSS &bull; shadcn</span>
           </div>
         </div>
       </footer>

@@ -2,8 +2,8 @@
 //!
 //! SQLx-based implementations of `AuthAdapter` for PostgreSQL and SQLite.
 //!
-//! - `SqliteAuthAdapter`: Full Better Auth implementation using SQLite (with in-memory mode for fast headless tests).
-//! - `PostgresAuthAdapter`: Production-grade Better Auth implementation using PostgreSQL.
+//! - `SqliteAuthAdapter`: SQLite implementation of `AuthAdapter` (with in-memory mode for fast headless tests).
+//! - `PostgresAuthAdapter`: PostgreSQL implementation of `AuthAdapter`.
 //! - Embedded DDL migrations for automatic table creation.
 
 pub mod naming;

@@ -1,10 +1,10 @@
-//! Cryptographic primitives for Better Auth wire and storage compatibility.
+//! Cryptographic primitives for authentication, token signing, and password hashing.
 //!
 //! - Non-blocking Argon2id password hashing and verification inside `tokio::task::spawn_blocking`.
-//! - Legacy Better Auth `scrypt` (`<salt>:<hex_key>`, N=16384, r=16, p=1, dkLen=64, NFKC-normalized)
-//!   verification for zero-downtime migration from TypeScript Better Auth databases.
-//! - HKDF-SHA256 key derivation and raw-secret HMAC-SHA256 verification from `BETTER_AUTH_SECRET`/`UNI_AUTH_SECRET`.
-//! - HMAC-SHA256 token and cookie signing matching Better Auth format (`token.signature`).
+//! - Legacy `scrypt` (`<salt>:<hex_key>`, N=16384, r=16, p=1, dkLen=64, NFKC-normalized)
+//!   verification for zero-downtime migration from legacy databases.
+//! - HKDF-SHA256 key derivation and raw-secret HMAC-SHA256 verification from `UNI_AUTH_SECRET`/`BETTER_AUTH_SECRET`.
+//! - HMAC-SHA256 token and cookie signing (`token.signature`).
 //! - Constant-time signature verification (`subtle::ConstantTimeEq`).
 //! - Cryptographically secure token generation (`rand::rngs::OsRng`).
 
@@ -22,7 +22,7 @@ use unicode_normalization::UnicodeNormalization;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Returns `true` if the stored password hash uses Better Auth's `<salt>:<hex_key>` scrypt format.
+/// Returns `true` if the stored password hash uses legacy `<salt>:<hex_key>` scrypt format.
 pub fn is_legacy_scrypt_hash(hash: &str) -> bool {
     !hash.starts_with("$argon2") && hash.contains(':')
 }
@@ -43,11 +43,11 @@ pub async fn hash_password(password: String) -> Result<String, String> {
 }
 
 /// Verifies a password against either an Argon2id PHC string (`$argon2id$...`) or
-/// a Better Auth TypeScript `scrypt` hash (`<salt>:<64_byte_hex_key>`) inside `spawn_blocking`.
+/// a legacy `scrypt` hash (`<salt>:<64_byte_hex_key>`) inside `spawn_blocking`.
 pub async fn verify_password(hash: String, password: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
         if is_legacy_scrypt_hash(&hash) {
-            return match verify_scrypt_better_auth(&hash, &password) {
+            return match verify_legacy_scrypt(&hash, &password) {
                 Ok(valid) => Ok(valid),
                 Err(e) => {
                     tracing::warn!("Malformed scrypt hash encountered: {e}");
@@ -78,17 +78,18 @@ pub async fn verify_password(hash: String, password: String) -> Result<bool, Str
     .map_err(|e| format!("Task join error during password verification: {e}"))?
 }
 
-/// Hashes a password using Better Auth's TypeScript `scrypt` parameters (`N=16384, r=16, p=1, dkLen=64`)
+/// Hashes a password using legacy `scrypt` parameters (`N=16384, r=16, p=1, dkLen=64`)
 /// with Unicode `NFKC` normalization and returns `<salt>:<hex_key>`.
-///
-/// Reference: `.reference/better-auth/packages/better-auth/src/crypto/password.test.ts` lines 72-78
-pub fn hash_scrypt_better_auth(salt: &str, password: &str) -> Result<String, String> {
+pub fn hash_legacy_scrypt(salt: &str, password: &str) -> Result<String, String> {
     let normalized: String = password.nfkc().collect();
     let dk = scrypt_derive(normalized.as_bytes(), salt.as_bytes(), 16384, 16, 1, 64)?;
     Ok(format!("{salt}:{}", hex_encode(&dk)))
 }
 
-fn verify_scrypt_better_auth(hash: &str, password: &str) -> Result<bool, String> {
+/// Backward compatibility alias for `hash_legacy_scrypt`.
+pub use hash_legacy_scrypt as hash_scrypt_better_auth;
+
+fn verify_legacy_scrypt(hash: &str, password: &str) -> Result<bool, String> {
     let (salt, expected_hex) = hash
         .split_once(':')
         .ok_or_else(|| "Invalid scrypt hash format: missing ':'".to_string())?;
@@ -303,67 +304,69 @@ pub fn derive_signing_key(secret: &[u8], info: &[u8]) -> [u8; 32] {
     okm
 }
 
-/// Signs a token string using raw-secret HMAC-SHA256 with standard padded Base64 (`=`),
-/// matching Better Auth and `better-call`'s `serializeSignedCookie` / `makeSignature`.
+/// Signs a token string using raw-secret HMAC-SHA256 with standard padded Base64 (`=`).
 ///
 /// Output format: `<token>.<base64_signature>`
 pub fn sign_token(secret: &[u8], token: &str) -> String {
-    sign_cookie_better_call(secret, token)
+    sign_cookie_hmac(secret, token)
 }
 
 /// Signs a token string using HKDF-derived key and base64urlnopad.
 /// Retained for backward-compatibility testing with legacy uni-auth tokens.
 pub fn sign_token_hkdf(secret: &[u8], token: &str) -> String {
-    let key = derive_signing_key(secret, b"better-auth-token-signing");
+    let key = derive_signing_key(secret, b"uni-auth-token-signing");
     let mut mac = HmacSha256::new_from_slice(&key).expect("HMAC can take key of any size");
     mac.update(token.as_bytes());
     let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
     format!("{token}.{signature}")
 }
 
-/// Signs a token string using raw-secret HMAC-SHA256 (`base64urlnopad`), matching
-/// `@better-auth/utils/hmac` (`createHMAC("SHA-256", "base64urlnopad")`).
-///
-/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/bearer/index.ts` lines 81-87
-pub fn sign_token_better_auth(secret: &[u8], token: &str) -> String {
+/// Signs a token string using raw-secret HMAC-SHA256 (`base64urlnopad`).
+pub fn sign_token_raw_hmac(secret: &[u8], token: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC can take key of any size");
     mac.update(token.as_bytes());
     let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
     format!("{token}.{signature}")
 }
 
-/// Signs a cookie token using raw-secret HMAC-SHA256 with standard padded Base64 (`=`),
-/// matching `better-call`'s `serializeSignedCookie` / `makeSignature`.
-///
-/// Reference: `.reference/better-auth/packages/better-auth/src/crypto/index.ts` lines 104-114
-pub fn sign_cookie_better_call(secret: &[u8], token: &str) -> String {
+/// Backward compatibility alias for `sign_token_raw_hmac`.
+pub use sign_token_raw_hmac as sign_token_better_auth;
+
+/// Signs a cookie token using raw-secret HMAC-SHA256 with standard padded Base64 (`=`).
+pub fn sign_cookie_hmac(secret: &[u8], token: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC can take key of any size");
     mac.update(token.as_bytes());
     let signature = STANDARD.encode(mac.finalize().into_bytes());
     format!("{token}.{signature}")
 }
 
+/// Backward compatibility alias for `sign_cookie_hmac`.
+pub use sign_cookie_hmac as sign_cookie_better_call;
+
 /// Verifies an HMAC-SHA256 signature against the raw token using constant-time comparison.
 ///
 /// Accepts:
-/// 1. `uni-auth` HKDF-derived `base64urlnopad` signatures (`derive_signing_key(secret, "better-auth-token-signing")`),
-/// 2. Upstream `@better-auth/utils/hmac` raw-secret `base64urlnopad` signatures, and
-/// 3. Upstream `better-call` raw-secret standard padded Base64 signatures (including URL-encoded `%3D`/`%2B`/`%2F`).
+/// 1. `uni-auth` HKDF-derived `base64urlnopad` signatures (`derive_signing_key(secret, "uni-auth-token-signing")`),
+/// 2. Raw-secret `base64urlnopad` signatures, and
+/// 3. Raw-secret standard padded Base64 signatures (including URL-encoded `%3D`/`%2B`/`%2F`).
 pub fn verify_signature(secret: &[u8], token: &str, signature: &str) -> bool {
     let decoded_sig = auth_proto::url_decode(signature);
     let sig_bytes = decoded_sig.as_bytes();
 
-    // 1. Check HKDF-derived key signature (uni-auth native)
-    let hkdf_key = derive_signing_key(secret, b"better-auth-token-signing");
-    let hkdf_matches = if let Ok(mut mac) = HmacSha256::new_from_slice(&hkdf_key) {
-        mac.update(token.as_bytes());
-        let expected_url = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
-        bool::from(expected_url.as_bytes().ct_eq(sig_bytes))
-    } else {
-        false
-    };
+    // 1. Check HKDF-derived key signature (uni-auth native and legacy salt)
+    let hkdf_key = derive_signing_key(secret, b"uni-auth-token-signing");
+    let hkdf_legacy_key = derive_signing_key(secret, b"better-auth-token-signing");
+    let hkdf_matches = [hkdf_key, hkdf_legacy_key].iter().any(|key| {
+        if let Ok(mut mac) = HmacSha256::new_from_slice(key) {
+            mac.update(token.as_bytes());
+            let expected_url = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+            bool::from(expected_url.as_bytes().ct_eq(sig_bytes))
+        } else {
+            false
+        }
+    });
 
-    // 2. Check raw-secret HMAC-SHA256 (upstream Better Auth / better-call)
+    // 2. Check raw-secret HMAC-SHA256
     let raw_matches = if let Ok(mut mac) = HmacSha256::new_from_slice(secret) {
         mac.update(token.as_bytes());
         let raw_mac = mac.finalize().into_bytes();
@@ -381,7 +384,7 @@ pub fn verify_signature(secret: &[u8], token: &str, signature: &str) -> bool {
 
 /// Strictly verifies a signed `<token>.<signature>` string, rejecting any unsigned input.
 ///
-/// Used for verifying `better-auth.session_token` cookies and strict Bearer tokens.
+/// Used for verifying session cookies and strict Bearer tokens.
 pub fn extract_and_verify_signed_token(secret: &[u8], signed_token: &str) -> Option<String> {
     let (token, signature) = signed_token.split_once('.')?;
     if token.is_empty() || signature.is_empty() {
@@ -398,7 +401,7 @@ pub fn extract_and_verify_signed_token(secret: &[u8], signed_token: &str) -> Opt
 ///
 /// - If `signed_or_raw` contains a `.`, it is verified as `<token>.<signature>`.
 /// - If `require_signature` is `true`, unsigned tokens (without `.`) are rejected (`None`).
-/// - If `require_signature` is `false` (default Better Auth Bearer plugin behavior),
+/// - If `require_signature` is `false`,
 ///   an unsigned token is returned as `Some(raw_token)` for database lookup.
 pub fn extract_and_verify_token_with_policy(
     secret: &[u8],
@@ -438,10 +441,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_legacy_scrypt_better_auth_password_verify() {
+    async fn test_legacy_scrypt_password_verify() {
         let salt = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
-        let password = "better-auth-ts-password";
-        let scrypt_hash = hash_scrypt_better_auth(salt, password).unwrap();
+        let password = "legacy-scrypt-password";
+        let scrypt_hash = hash_legacy_scrypt(salt, password).unwrap();
 
         assert!(is_legacy_scrypt_hash(&scrypt_hash));
         assert!(
@@ -463,18 +466,18 @@ mod tests {
         let nfd_password = "cafe\u{0301}-password-123";
         let nfc_password = "caf\u{00e9}-password-123";
 
-        let scrypt_hash = hash_scrypt_better_auth(salt, nfc_password).unwrap();
+        let scrypt_hash = hash_legacy_scrypt(salt, nfc_password).unwrap();
         assert!(
             verify_password(scrypt_hash.clone(), nfd_password.to_string())
                 .await
                 .unwrap(),
-            "Decomposed UTF-8 password must verify against NFKC-normalized Better Auth scrypt hash"
+            "Decomposed UTF-8 password must verify against NFKC-normalized scrypt hash"
         );
 
         // Compatibility characters (fullwidth Latin 'ＡＢＣ' -> 'ABC' under NFKC)
         let fullwidth_pw = "\u{ff21}\u{ff22}\u{ff23}-secret-99";
         let ascii_pw = "ABC-secret-99";
-        let fw_hash = hash_scrypt_better_auth(salt, fullwidth_pw).unwrap();
+        let fw_hash = hash_legacy_scrypt(salt, fullwidth_pw).unwrap();
         assert!(
             verify_password(fw_hash, ascii_pw.to_string())
                 .await

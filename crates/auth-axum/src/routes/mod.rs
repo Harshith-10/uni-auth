@@ -86,7 +86,7 @@ pub fn auth_routes_with_plugins(state: &AuthState) -> Router<AuthState> {
     let mut plugins: Vec<std::sync::Arc<dyn crate::plugin::AxumAuthPlugin>> =
         (*state.axum_plugins).clone();
 
-    // Dynamically mount any registered BetterAuthPlugin providing an Axum route provider
+    // Dynamically mount any registered plugin providing an Axum route provider
     for plugin in state.service.plugins().plugins() {
         if let Some(provider) = plugin.route_provider() {
             let pid = provider.route_plugin_id();

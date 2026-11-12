@@ -21,7 +21,7 @@ fn test_user_wire_serialization_exact_camel_case() {
 
     let val = serde_json::to_value(&user).unwrap();
 
-    // Assert exact Better Auth camelCase keys
+    // Assert exact camelCase keys
     assert_eq!(val["id"], "usr_12345");
     assert_eq!(val["name"], "Test User");
     assert_eq!(val["email"], "user@example.com");

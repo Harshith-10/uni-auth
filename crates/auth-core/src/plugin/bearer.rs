@@ -1,4 +1,4 @@
-//! Bearer authentication plugin matching upstream Better Auth (`packages/better-auth/src/plugins/bearer/index.ts`).
+//! Bearer authentication plugin for header-based Bearer token support.
 //!
 //! Converts `Authorization: Bearer <token>` requests into session authentication cookies,
 //! and automatically mirrors outgoing session `Set-Cookie` headers into `set-auth-token` headers.
@@ -8,7 +8,7 @@ use std::any::Any;
 use crate::adapter::BoxFuture;
 use crate::crypto;
 use crate::error::AuthError;
-use crate::plugin::{BetterAuthPlugin, EndpointHookContext};
+use crate::plugin::{AuthPlugin, EndpointHookContext};
 use crate::service::AuthService;
 
 /// Configuration options for the Bearer plugin.
@@ -37,7 +37,7 @@ impl BearerPlugin {
     }
 }
 
-impl BetterAuthPlugin for BearerPlugin {
+impl AuthPlugin for BearerPlugin {
     fn id(&self) -> &'static str {
         "bearer"
     }
@@ -88,7 +88,7 @@ impl BetterAuthPlugin for BearerPlugin {
                 if require_signature {
                     return Ok(());
                 }
-                crypto::sign_cookie_better_call(&secret, token)
+                crypto::sign_cookie_hmac(&secret, token)
             };
 
             // Verify signature

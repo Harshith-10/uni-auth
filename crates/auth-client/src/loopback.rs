@@ -8,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::client::{BetterAuthNativeClient, ClientError};
+use crate::client::{AuthClient, ClientError};
 
 const DEFAULT_LOOPBACK_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -135,7 +135,7 @@ pub async fn start_loopback_listener_with_timeout(
     Ok((port, rx))
 }
 
-impl BetterAuthNativeClient {
+impl AuthClient {
     /// Executes the full native system-browser OAuth login flow:
     ///
     /// 1. Binds an ephemeral local loopback listener.

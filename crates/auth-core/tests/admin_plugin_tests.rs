@@ -13,7 +13,7 @@ use auth_core::models::{
     AdminUpdateUserFields, CreateSessionInput, CreateUserInput, FieldUpdate, RequestMeta,
 };
 use auth_core::plugin::admin::{AdminPlugin, AdminServiceExt};
-use auth_core::plugin::{BetterAuthPlugin, EndpointHookContext};
+use auth_core::plugin::{AuthPlugin, EndpointHookContext};
 use auth_core::service::{AuthConfig, AuthService};
 use auth_proto::{AdminBanUserRequest, AdminHasPermissionRequest, AdminSetRoleRequest, RoleValue};
 

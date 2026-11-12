@@ -272,7 +272,7 @@ impl SqliteAuthAdapter {
         self.naming
     }
 
-    /// Creates an in-memory SQLite database and applies embedded Better Auth schema.
+    /// Creates an in-memory SQLite database and applies embedded schema.
     pub async fn new_in_memory() -> Result<Self, sqlx::Error> {
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")?
             .create_if_missing(true)
@@ -289,7 +289,7 @@ impl SqliteAuthAdapter {
         Ok(adapter)
     }
 
-    /// Executes the embedded Better Auth schema migration and idempotently upgrades older tables.
+    /// Executes the embedded schema migration and idempotently upgrades older tables.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
         sqlx::query("PRAGMA foreign_keys = ON;")
             .execute(&self.pool)

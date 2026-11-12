@@ -3,7 +3,7 @@
 use auth_proto::{SessionAndUserResponse, SessionWire, UserWire};
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::client::{BetterAuthNativeClient, ClientError};
+use crate::client::{AuthClient, ClientError};
 use crate::plugin::SessionSignalEvent;
 
 /// Reactive state of the current user session.
@@ -30,14 +30,14 @@ type Listener = Box<dyn Fn(&AuthStatus) + Send + Sync + 'static>;
 /// Designed to easily plug into GPUI reactive views (`cx.notify()`) or other desktop frameworks.
 #[derive(Clone)]
 pub struct AuthStore {
-    client: Arc<BetterAuthNativeClient>,
+    client: Arc<AuthClient>,
     status: Arc<RwLock<AuthStatus>>,
     listeners: Arc<Mutex<Vec<Listener>>>,
 }
 
 impl AuthStore {
     /// Creates a new `AuthStore` wrapping the native client, automatically subscribing to reactive session signals.
-    pub fn new(client: Arc<BetterAuthNativeClient>) -> Self {
+    pub fn new(client: Arc<AuthClient>) -> Self {
         let store = Self {
             client: client.clone(),
             status: Arc::new(RwLock::new(AuthStatus::Loading)),
@@ -136,7 +136,7 @@ impl AuthStore {
         store
     }
 
-    pub fn client(&self) -> &Arc<BetterAuthNativeClient> {
+    pub fn client(&self) -> &Arc<AuthClient> {
         &self.client
     }
 

@@ -1,15 +1,11 @@
-//! Better Auth error codes and JSON error response envelope.
-//!
-//! Matches the upstream definitions in `@better-auth/core/error` and `plugins/admin/error-codes.ts`:
-//! - `.reference/better-auth/packages/core/src/error/codes.ts`
-//! - `.reference/better-auth/packages/better-auth/src/plugins/admin/error-codes.ts`
+//! Standard error codes and JSON error response envelope.
 
 use serde::{Deserialize, Serialize};
 
-/// Better Auth wire error envelope.
+/// Standard wire error envelope.
 ///
 /// Returned on HTTP 4xx / 5xx error responses.
-/// Better Auth clients look for `message` and `code`.
+/// Clients look for `message` and `code`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthErrorResponse {
@@ -40,10 +36,7 @@ impl AuthErrorResponse {
     }
 }
 
-/// Standard Better Auth error code constants.
-///
-/// Direct parity with `BASE_ERROR_CODES` in `.reference/better-auth/packages/core/src/error/codes.ts`
-/// and `ADMIN_ERROR_CODES` in `.reference/better-auth/packages/better-auth/src/plugins/admin/error-codes.ts`.
+/// Standard error code constants.
 pub mod error_codes {
     pub const USER_NOT_FOUND: &str = "USER_NOT_FOUND";
     pub const FAILED_TO_CREATE_USER: &str = "FAILED_TO_CREATE_USER";

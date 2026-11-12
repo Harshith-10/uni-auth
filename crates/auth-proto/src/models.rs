@@ -1,21 +1,12 @@
 //! Core wire models: User, Session, Account entities in camelCase JSON.
-//!
-//! These map directly to the Better Auth core and Admin plugin schemas:
-//! - <https://better-auth.com/docs/concepts/database>
-//! - <https://better-auth.com/docs/concepts/users-accounts>
-//! - <https://better-auth.com/docs/plugins/admin>
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 /// User entity as seen on the wire (JSON responses).
 ///
-/// Matches the Better Auth `User` type with camelCase field names, including optional
-/// `admin` plugin fields (`role`, `banned`, `banReason`, `banExpires`).
+/// Includes optional `admin` plugin fields (`role`, `banned`, `banReason`, `banExpires`).
 /// The `password` field from the `account` table is **never** included here.
-///
-/// Reference: `.reference/better-auth/packages/better-auth/src/api/routes/sign-up.ts` lines 116-158
-/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/schema.ts` lines 3-28
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UserWire {
@@ -66,11 +57,7 @@ pub struct UserWire {
 
 /// Session entity as seen on the wire (JSON responses).
 ///
-/// Matches the Better Auth `Session` type with camelCase field names, including
-/// optional `impersonatedBy` from the `admin` plugin.
-///
-/// Reference: `.reference/better-auth/packages/better-auth/src/api/routes/session.ts` lines 50-57
-/// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/schema.ts` lines 29-37
+/// Includes optional `impersonatedBy` from the `admin` plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionWire {
@@ -111,9 +98,6 @@ pub struct SessionWire {
 /// Account entity as seen on the wire (JSON responses).
 ///
 /// This is the public view — the `password` field is **always** excluded.
-///
-/// Reference: `.reference/better-auth/packages/better-auth/src/db/`
-/// Reference: <https://better-auth.com/blog/1-7-account-schema>
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountWire {

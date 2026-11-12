@@ -1,17 +1,17 @@
-//! Plugin registry managing registered `BetterAuthPlugin` instances, endpoint hooks, and downcasting.
+//! Plugin registry managing registered plugin instances, endpoint hooks, and downcasting.
 
 use std::sync::Arc;
 
 use super::{
-    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, PluginMigration, PluginRateLimitRule,
+    AuthPlugin, DatabaseHooks, EndpointHookContext, PluginMigration, PluginRateLimitRule,
 };
 use crate::error::AuthError;
 use crate::service::AuthService;
 
-/// Thread-safe registry of `BetterAuthPlugin` extensions.
+/// Thread-safe registry of plugin extensions.
 #[derive(Default, Clone)]
 pub struct PluginRegistry {
-    plugins: Vec<Arc<dyn BetterAuthPlugin>>,
+    plugins: Vec<Arc<dyn AuthPlugin>>,
 }
 
 impl PluginRegistry {
@@ -22,8 +22,8 @@ impl PluginRegistry {
         }
     }
 
-    /// Registers a `BetterAuthPlugin`, replacing any existing plugin with the same `id()`.
-    pub fn register(&mut self, plugin: Arc<dyn BetterAuthPlugin>) {
+    /// Registers a plugin, replacing any existing plugin with the same `id()`.
+    pub fn register(&mut self, plugin: Arc<dyn AuthPlugin>) {
         let id = plugin.id();
         if let Some(existing) = self.plugins.iter_mut().find(|p| p.id() == id) {
             *existing = plugin;
@@ -45,12 +45,12 @@ impl PluginRegistry {
     }
 
     /// Returns a slice of all registered plugins.
-    pub fn plugins(&self) -> &[Arc<dyn BetterAuthPlugin>] {
+    pub fn plugins(&self) -> &[Arc<dyn AuthPlugin>] {
         &self.plugins
     }
 
     /// Finds and downcasts a registered plugin to its concrete type.
-    pub fn get<P: BetterAuthPlugin + 'static>(&self) -> Option<&P> {
+    pub fn get<P: AuthPlugin + 'static>(&self) -> Option<&P> {
         self.plugins
             .iter()
             .find_map(|p| p.as_any().downcast_ref::<P>())

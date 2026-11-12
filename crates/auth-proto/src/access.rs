@@ -1,6 +1,4 @@
-//! Shared resource-action Access Control engine for Better Auth plugins (`admin` and `organization`).
-//!
-//! Matches upstream `@better-auth/src/plugins/access` and `plugins/admin/access/statement.ts`.
+//! Shared resource-action Access Control engine for auth plugins (`admin` and `organization`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -90,9 +88,7 @@ impl AccessControl {
         Self::default()
     }
 
-    /// Constructs the default Better Auth `admin` plugin role hierarchy (`admin` and `user`).
-    ///
-    /// Reference: `.reference/better-auth/packages/better-auth/src/plugins/admin/access/statement.ts`
+    /// Constructs the default `admin` plugin role hierarchy (`admin` and `user`).
     pub fn default_admin() -> Self {
         let admin_role = RolePermissions::new()
             .with_resource(

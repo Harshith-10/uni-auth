@@ -1,4 +1,4 @@
-//! Integration tests for Better Auth server plugin ecosystem, database hooks, and plugin downcasting.
+//! Integration tests for server plugin ecosystem, database hooks, and plugin downcasting.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use auth_core::adapter::AuthAdapter;
 use auth_core::error::AuthError;
 use auth_core::models::*;
 use auth_core::plugin::{
-    BetterAuthPlugin, DatabaseHooks, EndpointHookContext, HookFuture, HookOutcome, PluginMigration,
+    AuthPlugin, DatabaseHooks, EndpointHookContext, HookFuture, HookOutcome, PluginMigration,
     PluginRateLimitRule, UserUpdatePatch,
 };
 use auth_core::{
@@ -112,7 +112,7 @@ impl DatabaseHooks for CustomHooks {
 }
 
 // ──────────────────────────────────────────────
-// Test BetterAuthPlugin Implementation
+// Test AuthPlugin Implementation
 // ──────────────────────────────────────────────
 
 struct SamplePlugin {
@@ -121,7 +121,7 @@ struct SamplePlugin {
     hooks: Arc<CustomHooks>,
 }
 
-impl BetterAuthPlugin for SamplePlugin {
+impl AuthPlugin for SamplePlugin {
     fn id(&self) -> &'static str {
         self.plugin_id
     }
@@ -591,7 +591,7 @@ fn test_plugin_registry_replace_by_id_and_removal() {
         id: &'static str,
         val: i32,
     }
-    impl BetterAuthPlugin for DummyPlugin {
+    impl AuthPlugin for DummyPlugin {
         fn id(&self) -> &'static str {
             self.id
         }
@@ -655,7 +655,7 @@ fn test_plugin_registry_replace_by_id_and_removal() {
 }
 
 #[tokio::test]
-async fn test_totp_validator_better_auth_plugin_registration() {
+async fn test_totp_validator_plugin_registration() {
     use auth_core::plugin::TotpValidator;
 
     let adapter = Arc::new(InMemoryAuthAdapter::new());

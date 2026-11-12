@@ -1,4 +1,4 @@
-//! Preconfigured CORS layer helper for Better Auth and native clients.
+//! Preconfigured CORS layer helper for web and native clients.
 //!
 //! Exposes `set-auth-token`, `set-admin-auth-token`, and `set-ott` in `Access-Control-Expose-Headers`
 //! and allows credentials for seamless web and desktop cross-origin requests.
@@ -6,7 +6,7 @@
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
-/// Builds a CORS layer configured specifically for Better Auth client compatibility.
+/// Builds a CORS layer configured for auth client compatibility.
 ///
 /// # Arguments
 /// - `allowed_origins`: Optional list of explicit origin strings (e.g. `["http://localhost:5173"]`).

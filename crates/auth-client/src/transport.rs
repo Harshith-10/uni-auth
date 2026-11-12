@@ -1,4 +1,4 @@
-//! Unified HTTP transport and interceptor pipeline modeled on Better Auth's `better-fetch`.
+//! Unified HTTP transport and interceptor pipeline.
 //!
 //! Provides automated Bearer authorization header injection, `set-auth-token` interception,
 //! plugin request/response lifecycle hooks, structured error decoding, and reactive signal emission.
@@ -8,7 +8,7 @@ use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::client::{BetterAuthNativeClient, ClientError};
+use crate::client::{AuthClient, ClientError};
 use auth_proto::AuthErrorResponse;
 
 /// Context passed to `AuthClientPlugin::on_request` hooks before transmission.
@@ -27,7 +27,7 @@ pub struct ClientResponseContext {
     pub headers: HeaderMap,
 }
 
-impl BetterAuthNativeClient {
+impl AuthClient {
     /// Unified request executor with automated Bearer injection, `set-auth-token` capture,
     /// plugin middleware execution, structured error decoding, and `$sessionSignal` notification.
     pub async fn send_auth_request<Q, B, Res>(

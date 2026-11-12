@@ -28,9 +28,9 @@ use crate::models::{
     CreateVerificationInput, RequestMeta, SessionRecord, UpdateUserFields, UserRecord,
 };
 #[allow(deprecated)]
-use crate::plugin::AuthPlugin;
+use crate::plugin::LegacyAuthPlugin;
 use crate::plugin::admin::{AdminPlugin, AdminServiceExt};
-use crate::plugin::{BetterAuthPlugin, HookedAdapter, PluginRateLimitRule, PluginRegistry};
+use crate::plugin::{AuthPlugin, HookedAdapter, PluginRateLimitRule, PluginRegistry};
 
 /// Configuration options for `AuthService`.
 #[derive(Clone, Debug)]
@@ -91,7 +91,7 @@ impl Default for AuthConfig {
     }
 }
 
-/// Core domain service handling all Better Auth workflows.
+/// Core domain service handling authentication workflows, sessions, and plugins.
 #[derive(Clone)]
 pub struct AuthService {
     config: AuthConfig,
@@ -103,7 +103,7 @@ pub struct AuthService {
     plugins: PluginRegistry,
     plugin_rate_limiters: Vec<(PluginRateLimitRule, Arc<SlidingWindowRateLimiter>)>,
     #[allow(deprecated)]
-    legacy_plugins: Arc<Vec<Arc<dyn AuthPlugin>>>,
+    legacy_plugins: Arc<Vec<Arc<dyn LegacyAuthPlugin>>>,
     auto_sign_in_after_verification: bool,
     session_update_age: Duration,
     session_fresh_age: Duration,
@@ -179,15 +179,15 @@ impl AuthService {
         self
     }
 
-    /// Registers a modular `BetterAuthPlugin` with `AuthService`.
-    pub fn with_plugin<P: BetterAuthPlugin + 'static>(mut self, plugin: P) -> Self {
+    /// Registers a modular plugin with `AuthService`.
+    pub fn with_plugin<P: AuthPlugin + 'static>(mut self, plugin: P) -> Self {
         self.plugins.register(Arc::new(plugin));
         self.rebuild_hooked_adapter();
         self
     }
 
-    /// Registers an `Arc<dyn BetterAuthPlugin>` with `AuthService`.
-    pub fn with_plugin_arc(mut self, plugin: Arc<dyn BetterAuthPlugin>) -> Self {
+    /// Registers a plugin `Arc` with `AuthService`.
+    pub fn with_plugin_arc(mut self, plugin: Arc<dyn AuthPlugin>) -> Self {
         self.plugins.register(plugin);
         self.rebuild_hooked_adapter();
         self
@@ -198,14 +198,14 @@ impl AuthService {
         &self.plugins
     }
 
-    /// Retrieves and downcasts a registered `BetterAuthPlugin` by type.
-    pub fn get_plugin<P: BetterAuthPlugin + 'static>(&self) -> Option<&P> {
+    /// Retrieves and downcasts a registered plugin by type.
+    pub fn get_plugin<P: AuthPlugin + 'static>(&self) -> Option<&P> {
         self.plugins.get::<P>()
     }
 
-    /// Registers a legacy `AuthPlugin` with `AuthService`.
+    /// Registers a legacy plugin with `AuthService`.
     #[allow(deprecated)]
-    pub fn with_legacy_plugin(mut self, plugin: Arc<dyn AuthPlugin>) -> Self {
+    pub fn with_legacy_plugin(mut self, plugin: Arc<dyn LegacyAuthPlugin>) -> Self {
         let mut list = (*self.legacy_plugins).clone();
         list.push(plugin);
         self.legacy_plugins = Arc::new(list);
@@ -214,7 +214,7 @@ impl AuthService {
 
     /// Accessor for legacy plugins.
     #[allow(deprecated)]
-    pub fn legacy_plugins(&self) -> &[Arc<dyn AuthPlugin>] {
+    pub fn legacy_plugins(&self) -> &[Arc<dyn LegacyAuthPlugin>] {
         &self.legacy_plugins
     }
 
@@ -320,7 +320,7 @@ impl AuthService {
 
     /// Signs a raw token using raw-secret HMAC-SHA256 with standard padded Base64 (`=`).
     pub fn sign_cookie_token(&self, raw_token: &str) -> String {
-        crypto::sign_cookie_better_call(&self.config.secret, raw_token)
+        crypto::sign_cookie_hmac(&self.config.secret, raw_token)
     }
 
     /// Strictly verifies a signed `<token>.<signature>` token (required for cookies).
@@ -388,7 +388,7 @@ impl AuthService {
     }
 
     /// Looks up a user's `credential` account by `(provider_id = "credential", account_id = user_id)`
-    /// with a fallback scan across `find_accounts_by_user_id` for migrated Better Auth databases
+    /// with a fallback scan across `find_accounts_by_user_id` for migrated databases
     /// where `account.account_id` differs from `user.id`.
     pub async fn find_credential_account(
         &self,
@@ -585,7 +585,7 @@ impl AuthService {
             return Err(AuthError::InvalidEmailOrPassword);
         }
 
-        // Transparently upgrade legacy Better Auth scrypt password hashes to Argon2id
+        // Transparently upgrade legacy scrypt password hashes to Argon2id
         if was_legacy_scrypt {
             if let Ok(upgraded_hash) = crypto::hash_password(password_clone).await {
                 let _ = self

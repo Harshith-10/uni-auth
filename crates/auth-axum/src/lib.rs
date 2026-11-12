@@ -1,9 +1,8 @@
 //! # auth-axum
 //!
-//! Axum HTTP router and dual Cookie/Bearer middleware achieving wire-level compatibility
-//! with the Better Auth TypeScript framework.
+//! Axum HTTP router and dual Cookie/Bearer middleware for authentication.
 //!
-//! - `auth_router(state: AuthState)`: Full router of Better Auth v1 endpoints mounted at `/api/auth`.
+//! - `auth_router(state: AuthState)`: Full router of auth endpoints mounted at `/api/auth`.
 //! - `CurrentSession`, `FreshSession` & `OptionalSession`: Transparent extractors for both Web (Cookie) and Desktop (Bearer).
 //! - `build_auth_cors_layer()`: Preconfigured CORS layer exposing `set-auth-token`.
 

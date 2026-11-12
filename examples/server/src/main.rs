@@ -1,6 +1,6 @@
 //! Example Axum authentication server.
 //!
-//! Serves Better Auth v1 routes at `/api/auth/*` for both:
+//! Serves auth routes at `/api/auth/*` for both:
 //! 1. React Web application (Cookie-based auth)
 //! 2. GPUI Native Desktop application (Bearer token + Keychain auth)
 //!
@@ -28,7 +28,7 @@ async fn saas_me(session: CurrentSession) -> Response {
     let transport = if session.is_bearer {
         "Bearer (Native Desktop / GPUI Keychain)"
     } else {
-        "Cookie (Web Browser / better-auth-client)"
+        "Cookie (Web Browser)"
     };
 
     let expires_at = session

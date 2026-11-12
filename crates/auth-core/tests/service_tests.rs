@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 
-use auth_core::crypto::hash_scrypt_better_auth;
+use auth_core::crypto::hash_legacy_scrypt;
 use auth_core::models::{AdminUpdateUserFields, CreateAccountInput, CreateUserInput, RequestMeta};
 use auth_core::{
     AuthConfig, AuthError, AuthService, EmailSender, InMemoryAuthAdapter, MockEmailSender,
@@ -401,7 +401,7 @@ async fn test_session_revocation_methods() {
 async fn test_scrypt_migration_and_account_unlink_and_user_lifecycle() {
     let (service, _) = create_test_service();
 
-    // 1. Sign up a user and replace their password hash with a Better Auth scrypt hash
+    // 1. Sign up a user and replace their password hash with a legacy scrypt hash
     let signup = service
         .sign_up_email(SignUpEmailRequest {
             name: "Legacy TS User".to_string(),
@@ -415,7 +415,7 @@ async fn test_scrypt_migration_and_account_unlink_and_user_lifecycle() {
         .unwrap();
 
     let scrypt_hash =
-        hash_scrypt_better_auth("00112233445566778899aabbccddeeff", "migrated-password-123")
+        hash_legacy_scrypt("00112233445566778899aabbccddeeff", "migrated-password-123")
             .unwrap();
     service
         .adapter()
@@ -549,7 +549,7 @@ async fn test_credential_account_with_distinct_account_id() {
         .await
         .unwrap();
 
-    let scrypt_hash = hash_scrypt_better_auth(
+    let scrypt_hash = hash_legacy_scrypt(
         "aabbccddeeff00112233445566778899",
         "caf\u{00e9}-password-99",
     )

@@ -3,7 +3,7 @@ use time::Duration;
 use tokio::net::TcpListener;
 
 use auth_axum::{AuthState, auth_router};
-use auth_client::{AuthStatus, AuthStore, BetterAuthNativeClient, MockTokenStorage, TokenStorage};
+use auth_client::{AuthClient, AuthStatus, AuthStore, MockTokenStorage, TokenStorage};
 use auth_core::{AuthConfig, AuthService, InMemoryAuthAdapter};
 use auth_proto::{AdminCreateUserRequest, RoleValue, UserWire};
 use axum::Router;
@@ -55,7 +55,7 @@ async fn test_desktop_auth_headless_interaction(cx: &mut TestAppContext) {
 
     let (server_url, auth_base_url, service) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(
+    let client = Arc::new(AuthClient::new(
         auth_base_url,
         Arc::clone(&storage) as Arc<dyn TokenStorage>,
     ));

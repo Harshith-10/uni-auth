@@ -904,7 +904,7 @@ impl DashboardView {
                                                 .child(DialogTitle::new().child("Create New User"))
                                                 .child(
                                                     DialogDescription::new().child(
-                                                        "Provision an account directly via Better-Auth Admin API",
+                                                        "Provision an account directly via Admin API",
                                                     ),
                                                 ),
                                         ),

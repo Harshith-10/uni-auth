@@ -408,8 +408,8 @@ export function AuthCard({
         </div>
       </CardContent>
 
-      <CardFooter className="pt-0 pb-3 flex justify-center text-[10px] text-muted-foreground">
-        <span>Uni-Auth Axum Server &bull; RFC 6749 &bull; Better-Auth Protocol</span>
+      <CardFooter className="py-3 flex justify-center text-[10px] text-muted-foreground">
+        <span>Powered by uni-auth</span>
       </CardFooter>
     </Card>
   );

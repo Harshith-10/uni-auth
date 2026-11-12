@@ -1,4 +1,4 @@
--- Better Auth PostgreSQL Migration
+-- PostgreSQL Migration
 -- Core Schema: user, session, account, verification
 
 CREATE TABLE IF NOT EXISTS "user" (

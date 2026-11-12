@@ -1,15 +1,15 @@
-//! RFC 6238 Time-Based One-Time Password (TOTP) helper for the Better Auth `two-factor` plugin.
+//! RFC 6238 Time-Based One-Time Password (TOTP) helper for two-factor authentication.
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::any::Any;
 use time::OffsetDateTime;
 
-use super::BetterAuthPlugin;
+use super::AuthPlugin;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// RFC 6238 Time-Based One-Time Password (TOTP) helper for the Better Auth `two-factor` plugin.
+/// RFC 6238 Time-Based One-Time Password (TOTP) helper for two-factor authentication.
 #[derive(Debug, Clone)]
 pub struct TotpValidator {
     /// Time step in seconds (standard: 30s).
@@ -62,7 +62,7 @@ impl TotpValidator {
     }
 }
 
-impl BetterAuthPlugin for TotpValidator {
+impl AuthPlugin for TotpValidator {
     fn id(&self) -> &'static str {
         "two-factor"
     }

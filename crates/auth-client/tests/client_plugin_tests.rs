@@ -1,4 +1,4 @@
-//! Integration tests for Stage 6: BetterFetch transport, AuthClientPlugin interceptors,
+//! Integration tests for transport, AuthClientPlugin interceptors,
 //! $sessionSignal reactivity, and AdminClientExt / OneTimeTokenClientExt extension traits.
 
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use auth_axum::{AuthState, auth_router};
 use auth_client::plugin::{AuthClientPlugin, ClientSignalListener, SESSION_SIGNAL};
 use auth_client::transport::{ClientRequestContext, ClientResponseContext};
 use auth_client::{
-    AdminClientExt, BetterAuthNativeClient, ClientError, MockTokenStorage, OneTimeTokenClientExt,
+    AdminClientExt, AuthClient, ClientError, MockTokenStorage, OneTimeTokenClientExt,
     TokenStorage,
 };
 use auth_core::models::AdminUpdateUserFields;
@@ -100,7 +100,7 @@ async fn test_client_plugin_interceptors() {
     let storage = Arc::new(MockTokenStorage::new());
     let logging_plugin = Arc::new(TestLoggingPlugin::default());
 
-    let client = BetterAuthNativeClient::new(base_url, storage as Arc<dyn TokenStorage>)
+    let client = AuthClient::new(base_url, storage as Arc<dyn TokenStorage>)
         .with_plugin_arc(logging_plugin.clone());
 
     // 1. Send request
@@ -127,7 +127,7 @@ async fn test_client_plugin_interceptors() {
 async fn test_reactive_session_signal_listener() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = BetterAuthNativeClient::new(base_url, storage as Arc<dyn TokenStorage>);
+    let client = AuthClient::new(base_url, storage as Arc<dyn TokenStorage>);
 
     let signal_received = Arc::new(AtomicBool::new(false));
     let flag_clone = signal_received.clone();
@@ -158,7 +158,7 @@ async fn test_reactive_session_signal_listener() {
 async fn test_admin_client_ext_facade_and_local_rbac() {
     let (base_url, service) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = BetterAuthNativeClient::new(base_url, storage as Arc<dyn TokenStorage>);
+    let client = AuthClient::new(base_url, storage as Arc<dyn TokenStorage>);
 
     // 1. Local client-side RBAC evaluation (zero network roundtrip)
     let mut admin_check = HashMap::new();
@@ -226,7 +226,7 @@ async fn test_admin_client_ext_facade_and_local_rbac() {
 async fn test_one_time_token_client_ext_facade() {
     let (base_url, _) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = BetterAuthNativeClient::new(base_url, storage as Arc<dyn TokenStorage>);
+    let client = AuthClient::new(base_url, storage as Arc<dyn TokenStorage>);
 
     client
         .sign_up_email(
@@ -267,7 +267,7 @@ async fn test_client_with_plugin_deduplication() {
     }
 
     let storage = Arc::new(MockTokenStorage::new());
-    let client = BetterAuthNativeClient::new(
+    let client = AuthClient::new(
         "http://localhost:3000".to_string(),
         storage as Arc<dyn TokenStorage>,
     )
@@ -296,7 +296,7 @@ async fn test_auth_store_automatic_reaction_to_impersonation_and_ott() {
 
     let (base_url, service) = start_test_server().await;
     let storage = Arc::new(MockTokenStorage::new());
-    let client = Arc::new(BetterAuthNativeClient::new(
+    let client = Arc::new(AuthClient::new(
         base_url,
         Arc::clone(&storage) as Arc<dyn TokenStorage>,
     ));
