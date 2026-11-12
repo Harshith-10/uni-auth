@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v0.1.0)'
+        description: 'Tag to release (e.g. v0.2.0)'
         required: false
 
 permissions:
@@ -23,14 +23,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Verify workspace compiles
-        run: cargo check --workspace --all-targets
+      - name: Verify publishable crates compile
+        run: cargo check -p uni-auth-proto -p uni-auth-core -p uni-auth-sqlx -p uni-auth-axum -p uni-auth-client -p uni-auth
 
       - name: Publish crates in topological dependency order
         env:
