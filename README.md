@@ -20,7 +20,7 @@ A modular, high-performance, cross-platform authentication engine and toolkit fo
 - **Pluggable Architecture & Lifecycle Hooks**: Extensible `AuthPlugin` trait with endpoint interceptors, rate limiting, dynamic route registration, and `DatabaseHooks` for user and session lifecycle events.
 - **Full-Featured Admin & RBAC**: Role-based access control, user provisioning, ban/unban with expiration, and admin session impersonation.
 - **Social OAuth 2.0**: Built-in Google and GitHub OAuth providers with PKCE, state hygiene, and loopback listener support for desktop clients.
-- **Cross-Platform Native Client**: Dedicated client library (`auth-client`) with reactive session state (`AuthStore`), loopback OAuth listeners, and secure OS Keychain token persistence (`keyring` for macOS Keychain, Windows Credential Manager, and Linux Secret Service).
+- **Cross-Platform Native Client**: Dedicated client library (`uni-auth-client`) with reactive session state (`AuthStore`), loopback OAuth listeners, and secure OS Keychain token persistence (`keyring` for macOS Keychain, Windows Credential Manager, and Linux Secret Service).
 
 ---
 
@@ -127,9 +127,32 @@ The desktop app demonstrates:
 
 ---
 
+## Installation
+
+Add the umbrella crate with the features you need:
+
+```toml
+[dependencies]
+# Full batteries-included umbrella crate
+uni-auth = { version = "0.1", features = ["axum", "sqlx", "client"] }
+```
+
+Or install individual decoupled crates directly:
+
+```toml
+[dependencies]
+uni-auth-core = "0.1"    # Domain logic & crypto
+uni-auth-proto = "0.1"   # DTOs & wire schemas
+uni-auth-axum = "0.1"    # Axum HTTP routes & middleware
+uni-auth-sqlx = "0.1"    # PostgreSQL & SQLite adapters
+uni-auth-client = "0.1"  # Native client SDK & OS keychain
+```
+
+---
+
 ## Usage Guide
 
-### Setting Up the Server (`auth-axum` & `auth-core`)
+### Setting Up the Server (`uni-auth-axum` & `uni-auth-core`)
 
 ```rust
 use std::sync::Arc;
@@ -194,7 +217,7 @@ async fn protected_profile(session: CurrentSession) -> Response {
 }
 ```
 
-### Using the Native Client SDK (`auth-client`)
+### Using the Native Client SDK (`uni-auth-client`)
 
 ```rust
 use std::sync::Arc;
@@ -245,32 +268,6 @@ Run the Node.js protocol compatibility verification test:
 
 ```bash
 node tests/node_compat_test.mjs
-```
-
----
-
-## Releasing & Versioning
-
-The project includes built-in release automation that calculates the next semver increment from Conventional Commits, updates workspace manifests and changelogs, tags the release, and publishes in topological dependency order.
-
-### Single-Command Release
-
-```bash
-# Auto-increments version from git commits, updates manifests & CHANGELOG.md, commits, and tags
-cargo release-workspace
-
-# Or using the root helper scripts:
-./release.ps1        # PowerShell (Windows)
-./release.sh         # Bash (Linux / macOS)
-
-# Preview the release without modifying any files or git state:
-cargo release-workspace --dry-run
-
-# Commit, tag, and push to origin (triggers GitHub Actions automated crates.io publish):
-cargo release-workspace --push
-
-# Or publish directly from the local terminal:
-cargo release-workspace --publish
 ```
 
 ---
