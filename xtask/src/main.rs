@@ -40,6 +40,10 @@ fn main() {
             let opts = parse_release_args(&args[1..]);
             run_release(opts);
         }
+        "publish" => {
+            let dry_run = args.iter().any(|a| a == "--dry-run");
+            run_publish_current(dry_run);
+        }
         "check" => {
             run_check();
         }
@@ -134,6 +138,41 @@ fn run_check() {
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
+}
+
+fn run_publish_current(dry_run: bool) {
+    let root = workspace_root();
+    let cargo_toml_path = root.join("Cargo.toml");
+    let content = fs::read_to_string(&cargo_toml_path).expect("Failed to read root Cargo.toml");
+    let current_version = extract_workspace_version(&content)
+        .expect("Could not find [workspace.package].version in root Cargo.toml");
+
+    println!("==> Publishing current workspace version v{} to crates.io:", current_version);
+    if dry_run {
+        println!("*** DRY RUN MODE ENABLED ***\n");
+    }
+
+    for &crate_name in CRATES_IN_PUBLISH_ORDER {
+        println!("\n---> Package: {} (v{})", crate_name, current_version);
+        let mut cmd = Command::new("cargo");
+        cmd.args(["publish", "-p", crate_name]).current_dir(&root);
+
+        if dry_run {
+            cmd.arg("--dry-run");
+        }
+
+        let status = cmd.status().expect("Failed to execute cargo publish");
+        if !status.success() {
+            eprintln!("Failed to publish package '{}'", crate_name);
+            std::process::exit(1);
+        }
+
+        if !dry_run {
+            println!("Waiting 15 seconds for crates.io registry index propagation...");
+            thread::sleep(Duration::from_secs(15));
+        }
+    }
+    println!("\n==> Successfully published all crates for v{} to crates.io!", current_version);
 }
 
 fn run_release(opts: ReleaseOptions) {

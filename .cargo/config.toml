@@ -1,6 +1,7 @@
 [alias]
 xtask = "run --package xtask --"
 release-workspace = "run --package xtask -- release"
+publish-workspace = "run --package xtask -- publish"
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/STACK:8000000"]
