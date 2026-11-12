@@ -41,28 +41,31 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN || secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          echo "==> Publishing uni-auth-proto..."
-          cargo publish -p uni-auth-proto
-          sleep 15
+          publish_crate() {
+            pkg="$1"
+            echo "----------------------------------------------------"
+            echo "==> Publishing $pkg..."
+            if output=$(cargo publish -p "$pkg" 2>&1); then
+              echo "$output"
+              echo "==> Successfully published $pkg"
+              sleep 15
+            else
+              if echo "$output" | grep -qi "already uploaded"; then
+                echo "==> Notice: $pkg is already published on crates.io, skipping."
+              else
+                echo "$output"
+                echo "==> Error publishing $pkg"
+                exit 1
+              fi
+            fi
+          }
 
-          echo "==> Publishing uni-auth-core..."
-          cargo publish -p uni-auth-core
-          sleep 15
-
-          echo "==> Publishing uni-auth-sqlx..."
-          cargo publish -p uni-auth-sqlx
-          sleep 15
-
-          echo "==> Publishing uni-auth-axum..."
-          cargo publish -p uni-auth-axum
-          sleep 15
-
-          echo "==> Publishing uni-auth-client..."
-          cargo publish -p uni-auth-client
-          sleep 15
-
-          echo "==> Publishing uni-auth..."
-          cargo publish -p uni-auth
+          publish_crate uni-auth-proto
+          publish_crate uni-auth-core
+          publish_crate uni-auth-sqlx
+          publish_crate uni-auth-axum
+          publish_crate uni-auth-client
+          publish_crate uni-auth
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

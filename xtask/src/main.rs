@@ -42,7 +42,8 @@ fn main() {
         }
         "publish" => {
             let dry_run = args.iter().any(|a| a == "--dry-run");
-            run_publish_current(dry_run);
+            let target_pkg = args.iter().skip(1).find(|a| !a.starts_with('-')).cloned();
+            run_publish_current(dry_run, target_pkg.as_deref());
         }
         "check" => {
             run_check();
@@ -140,19 +141,25 @@ fn run_check() {
     }
 }
 
-fn run_publish_current(dry_run: bool) {
+fn run_publish_current(dry_run: bool, target_pkg: Option<&str>) {
     let root = workspace_root();
     let cargo_toml_path = root.join("Cargo.toml");
     let content = fs::read_to_string(&cargo_toml_path).expect("Failed to read root Cargo.toml");
     let current_version = extract_workspace_version(&content)
         .expect("Could not find [workspace.package].version in root Cargo.toml");
 
-    println!("==> Publishing current workspace version v{} to crates.io:", current_version);
+    let crates_to_publish: Vec<&str> = if let Some(pkg) = target_pkg {
+        vec![pkg]
+    } else {
+        CRATES_IN_PUBLISH_ORDER.to_vec()
+    };
+
+    println!("==> Publishing workspace version v{} to crates.io:", current_version);
     if dry_run {
         println!("*** DRY RUN MODE ENABLED ***\n");
     }
 
-    for &crate_name in CRATES_IN_PUBLISH_ORDER {
+    for &crate_name in &crates_to_publish {
         println!("\n---> Package: {} (v{})", crate_name, current_version);
         let mut cmd = Command::new("cargo");
         cmd.args(["publish", "-p", crate_name]).current_dir(&root);
@@ -161,18 +168,28 @@ fn run_publish_current(dry_run: bool) {
             cmd.arg("--dry-run");
         }
 
-        let status = cmd.status().expect("Failed to execute cargo publish");
-        if !status.success() {
+        let output = cmd.output().expect("Failed to execute cargo publish");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if output.status.success() {
+            print!("{}", stdout);
+            print!("{}", stderr);
+            println!("==> Successfully published {}", crate_name);
+            if !dry_run && crates_to_publish.len() > 1 {
+                println!("Waiting 15 seconds for crates.io registry index propagation...");
+                thread::sleep(Duration::from_secs(15));
+            }
+        } else if stderr.to_lowercase().contains("already uploaded") {
+            println!("==> Notice: {} v{} is already published on crates.io, skipping.", crate_name, current_version);
+        } else {
+            eprint!("{}", stdout);
+            eprint!("{}", stderr);
             eprintln!("Failed to publish package '{}'", crate_name);
             std::process::exit(1);
         }
-
-        if !dry_run {
-            println!("Waiting 15 seconds for crates.io registry index propagation...");
-            thread::sleep(Duration::from_secs(15));
-        }
     }
-    println!("\n==> Successfully published all crates for v{} to crates.io!", current_version);
+    println!("\n==> Completed publish step for v{}!", current_version);
 }
 
 fn run_release(opts: ReleaseOptions) {
